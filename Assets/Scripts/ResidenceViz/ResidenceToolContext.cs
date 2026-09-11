@@ -163,6 +163,13 @@ public interface IResidenceTool
     void Enter(ResidenceToolContext ctx);
     void Exit();
 
+    /// <summary>
+    /// Esc, first rung: drop whatever the tool is holding but has not committed (an armed catalog
+    /// item). Returns true when there was something to drop, in which case the press is spent and
+    /// the selection stays.
+    /// </summary>
+    bool Cancel();
+
     /// <summary>Per-frame input. Not called while the pointer is over a rail.</summary>
     void HandleInput();
 
@@ -199,6 +206,7 @@ public abstract class ResidenceToolBase : IResidenceTool
 
     public virtual void Enter(ResidenceToolContext ctx) { Ctx = ctx; }
     public virtual void Exit() { }
+    public virtual bool Cancel() => false;
     public virtual void HandleInput() { }
     public virtual void Tick() { }
     public virtual void DrawRail() { }

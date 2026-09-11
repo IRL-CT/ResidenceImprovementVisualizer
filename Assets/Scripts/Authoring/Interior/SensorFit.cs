@@ -364,16 +364,25 @@ public static class SensorFit
 
     // Catalog ids, the key space shared by FurnitureCatalog, PrefabRegistry and SampleFurniture, so
     // these work on a residence the user drew, not only on the shipped six.
+    // Upholstered seating and beds, where a pressure pad reads. A dining chair and a bar stool are
+    // deliberately out: the report specifies the pad for where someone rests, not where they eat.
     private static readonly HashSet<string> BedsAndSeats = new HashSet<string>
     {
-        "twin_bed", "full_bed", "hospital_bed", "recliner", "armchair", "sofa",
+        "twin_bed", "full_bed", "queen_bed", "king_bed", "daybed", "hospital_bed",
+        "recliner", "lift_recliner", "armchair", "accent_chair",
+        "sofa", "loveseat", "sectional", "sofa_bed",
     };
 
-    private static readonly HashSet<string> Cooktops = new HashSet<string> { "range" };
+    // Shared with SensorPackages.Cooktops, which reads this through StoveHosts rather than keeping
+    // its own copy: the two drifting apart would ship a care package with no stove sensor.
+    public static readonly HashSet<string> Cooktops = new HashSet<string> { "range" };
 
     private static readonly HashSet<string> PlumbingItems = new HashSet<string>
     {
-        "toilet", "sink_pedestal", "vanity", "bathtub", "roll_in_shower", "sink_base",
+        "toilet", "comfort_height_toilet", "sink_pedestal", "wall_basin",
+        "vanity", "double_vanity", "bathtub", "walk_in_tub",
+        "roll_in_shower", "shower_stall", "sink_base", "utility_sink",
+        "washing_machine", "dishwasher", "water_heater",
     };
 
     /// <summary>
@@ -382,8 +391,12 @@ public static class SensorFit
     /// </summary>
     private static readonly HashSet<string> Surfaces = new HashSet<string>
     {
-        "base_cabinet", "sink_base", "island", "dining_table", "coffee_table",
-        "nightstand", "dresser", "tv_stand",
+        "base_cabinet", "counter_run", "corner_cabinet", "sink_base", "island", "folding_counter",
+        "dining_table", "dining_table_6", "dining_table_round", "bistro_table",
+        "coffee_table", "side_table", "nest_of_tables", "console_table", "overbed_table",
+        "desk", "corner_desk", "craft_table", "dressing_table",
+        "nightstand", "dresser", "chest_of_drawers", "tv_stand", "media_unit",
+        "sideboard", "vanity", "double_vanity", "low_bookshelf", "trunk", "blanket_chest",
     };
 
     private static HashSet<string> HostItemsFor(string deviceType) => deviceType switch

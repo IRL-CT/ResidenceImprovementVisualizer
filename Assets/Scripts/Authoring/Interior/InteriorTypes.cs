@@ -66,6 +66,19 @@ public static class ResidenceConventions
     // WHICH wall when you are between two of them.
     public const float MOUNT_REACH = 1.2f;
 
+    // How much daylight between a piece of floor furniture and a wall face still snaps it flush.
+    // Tight on purpose: it should feel like the wall catching something aimed at it, and leave the
+    // middle of a room free. Ctrl widens it to MOUNT_REACH, the same reach the wall mounts use.
+    public const float FURNITURE_SNAP_RANGE = 0.15f;
+
+    // Closer than this to a face counts as already flush, which is what a turn or a resize preserves.
+    public const float FURNITURE_FLUSH_TOL = 0.02f;
+
+    // What the facing field and the rotate ring step by, and what Shift refines that to. Fifteen is
+    // the value Shift+scroll has always used; a quarter turn is six notches.
+    public const float FACING_STEP_DEG = 15f;
+    public const float FACING_FINE_DEG = 1f;
+
     // Geometry tolerance in meters. Two points closer than this are "the same point" for junction
     // welding, snapping, and polygon degeneracy checks.
     public const float EPS = 1e-4f;

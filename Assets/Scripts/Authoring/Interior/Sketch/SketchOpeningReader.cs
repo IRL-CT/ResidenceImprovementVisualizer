@@ -53,6 +53,7 @@ public static class SketchOpeningReader
                                        int stroke, bool windows)
     {
         var gaps = new List<SketchGap>();
+        var spans = new List<float>();   // per gap: the wall assembly width its probes crossed, px
         var cells = graph.cells;
 
         // Doorways, in wall order: horizontal lines top to bottom, then vertical left to right,
@@ -91,18 +92,40 @@ public static class SketchOpeningReader
             float center = 0.5f * (d.g0 + d.g1);
             float off = 0.5f * thickness + 2f;
             int sideA, sideB;   // A: smaller coordinate side (north of an H wall, west of a V wall)
+            float coordA = lineCoord, coordB = lineCoord;   // far faces of the crossed assembly
             if (d.horizontal)
             {
                 sideA = cells.LabelAt(center, lineCoord - off);
                 sideB = cells.LabelAt(center, lineCoord + off);
+                if (sideA == SketchCellMap.FOLDED)
+                { sideA = cells.LabelAcrossFolded(center, lineCoord - off, 0, -1, out int f); coordA = cells.ys[f]; }
+                if (sideB == SketchCellMap.FOLDED)
+                { sideB = cells.LabelAcrossFolded(center, lineCoord + off, 0, +1, out int f); coordB = cells.ys[f]; }
             }
             else
             {
                 sideA = cells.LabelAt(lineCoord - off, center);
                 sideB = cells.LabelAt(lineCoord + off, center);
+                if (sideA == SketchCellMap.FOLDED)
+                { sideA = cells.LabelAcrossFolded(lineCoord - off, center, -1, 0, out int f); coordA = cells.xs[f]; }
+                if (sideB == SketchCellMap.FOLDED)
+                { sideB = cells.LabelAcrossFolded(lineCoord + off, center, +1, 0, out int f); coordB = cells.xs[f]; }
             }
 
-            if (sideA == SketchCellMap.FOLDED || sideB == SketchCellMap.FOLDED) continue;
+            // A probe that crossed folded cells reached its room through a wall assembly the fold
+            // swallowed (a double line's channel, a split thick wall), and the mask above verified
+            // the gap through only the near pane's slab. The candidate stands only if the mask
+            // also reads open across the WHOLE assembly: a door punched through both panes passes
+            // (the channel is white), a door through one pane hits the far pane lying along the
+            // wall and the run cap vetoes.
+            if (coordA != lineCoord || coordB != lineCoord)
+            {
+                int span = Mathf.RoundToInt(coordB - coordA) + thickness;
+                if (!GapReadsOpen(wall, w, h, d.horizontal, 0.5f * (coordA + coordB),
+                                  d.g0, d.g1, span, stroke))
+                    continue;
+            }
+
             if (sideA == sideB) continue;   // both outside, or a break inside one room
 
             // A closet is at most about twice its door in each direction, so the smaller adjacent
@@ -110,8 +133,8 @@ public static class SketchOpeningReader
             // jambs are accepted only there; the flag also keeps the gap out of the scale anchor.
             if (sideA >= 0 && sideB >= 0)
             {
-                int rectA = FindRect(rects, sideA, d.horizontal, lineCoord, center, -off);
-                int rectB = FindRect(rects, sideB, d.horizontal, lineCoord, center, +off);
+                int rectA = FindRect(rects, sideA, d.horizontal, coordA, center, -off);
+                int rectB = FindRect(rects, sideB, d.horizontal, coordB, center, +off);
                 if (rectA < 0 || rectB < 0) continue;
                 bool closet = Mathf.Min(AreaPx(rects[rectA]), AreaPx(rects[rectB]))
                               <= 4f * width * width;
@@ -122,12 +145,14 @@ public static class SketchOpeningReader
                     horizontal = d.horizontal, line = d.line,
                     center = center, widthPx = width, closet = closet,
                 });
+                spans.Add(coordB - coordA + thickness);
             }
             else
             {
                 bool outsideOnA = sideA < 0;
                 int room = outsideOnA ? sideB : sideA;
-                int rect = FindRect(rects, room, d.horizontal, lineCoord, center, outsideOnA ? +off : -off);
+                int rect = FindRect(rects, room, d.horizontal, outsideOnA ? coordB : coordA,
+                                    center, outsideOnA ? +off : -off);
                 if (rect < 0) continue;
                 bool closet = AreaPx(rects[rect]) <= 4f * width * width;
                 if ((shortA || shortB) && !closet) continue;
@@ -138,6 +163,30 @@ public static class SketchOpeningReader
                     horizontal = d.horizontal, line = d.line,
                     center = center, widthPx = width, closet = closet,
                 });
+                spans.Add(coordB - coordA + thickness);
+            }
+        }
+
+        // A door through a double-line wall now verifies on BOTH pane lines, resolving across the
+        // folded channel to the same pair from each: one door, not two. The first in wall order
+        // stands; twins carry the same erased width, so the scale anchor is indifferent. The line
+        // distance is bounded by the wider crossed assembly, so doors of distinct parallel walls
+        // (which resolve to distinct pairs anyway) stay untouched.
+        for (int i = gaps.Count - 1; i >= 1; i--)
+        {
+            var g = gaps[i];
+            float gLine = g.horizontal ? cells.ys[g.line] : cells.xs[g.line];
+            for (int j = 0; j < i; j++)
+            {
+                var e = gaps[j];
+                if (e.horizontal != g.horizontal || e.rectA != g.rectA || e.rectB != g.rectB) continue;
+                if (g.rectB < 0 && e.edge != g.edge) continue;
+                if (Mathf.Abs(e.center - g.center) >= 0.5f * (e.widthPx + g.widthPx)) continue;
+                float eLine = e.horizontal ? cells.ys[e.line] : cells.xs[e.line];
+                if (Mathf.Abs(eLine - gLine) > Mathf.Max(spans[i], spans[j])) continue;
+                gaps.RemoveAt(i);
+                spans.RemoveAt(i);
+                break;
             }
         }
 

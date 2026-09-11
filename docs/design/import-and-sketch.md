@@ -464,8 +464,41 @@ overlap failures, does not exist. A room's cells are cut into rectangles by a ro
 exact on any rectilinear shape, two rectangles for an L, three for a U, deterministic because the
 sweep order is the scan order. The minimal-partition matching algorithm was considered and skipped:
 `partOf` tolerates a non-minimal partition, and the matching's tie-breaking would be its own
-determinism project. Thin bounded strips (a double-line wall's channel, a hatch band) fold back
-into wall before naming, replacing the old thin-rectangle filter.
+determinism project.
+
+**The sealed-strip fold: a wall's own footprint is not a room.** A wall drawn thick mints two wall
+lines inside one physical wall, two ways: an outlined wall whose light channel is past the grouping
+cap (`2*stroke + 1`) keeps its two panes as two chains, and a solid wall wider than `3*stroke` can
+be split by the snap's width cap. Either way the interval between the lines is a bounded cell, a
+candidate room occupying the wall itself. The first fold rule was a `3*stroke` bar on the room's
+bounding box, and it was blind twice over: the global stroke is a lower median the plan's thin
+content (dimension lines, furniture) drags below the drawn wall width, and an L- or ring-shaped
+channel is wide in both axes by bounding box while every cell of it is one thin strip. So the fold
+is now judged PER CELL: a room folds when every cell of it is a strip (thin across one axis, wall
+cover blocking both edges of that axis) or a junction (the corner cell where two channels meet,
+open into each and thin in both axes; each pane stops at the inner corner, so a corner cell is
+never sealed on its inner sides). The width cap is `max(3*stroke, 4x the thinner flanking run's
+measured thickness)`: the old bar kept verbatim as the floor, and the measured term derived from
+extraction's own ceiling (no crossing survives past `6*stroke`, and a hollow assembly is two panes
+around a channel, so a real channel spans at most about four of the locally measured pane width);
+the thinner flank, so one thick wall cannot license folding a corridor beside it.
+
+Doorways decide walkability, and the test is evenness. Cover runs bridge doorways virtually, so
+blocked edges alone cannot tell a sealed channel from a doored passage; the candidate list, complete
+before the cells are built, can. A doorway piercing ONE flank of a strip makes it a walk-in you
+enter and stand in, and the cell keeps its room; a doorway piercing BOTH flanks at the same stretch
+is a door THROUGH the assembly, and the strip is still wall. The opening reader completes the
+story: a probe that lands on a folded cell walks cell by cell to the first unfolded label, and a
+candidate that crossed folded cells must pass `GapReadsOpen` again over the WHOLE assembly, near
+face to far face; a door punched through both panes passes (the channel is white), a door through
+only one pane hits the far pane lying along the wall and the run cap vetoes. A door through a
+double-line wall then verifies on both pane lines and resolves to the same pair from each, so a
+twin dedup keeps the first in wall order; twins carry the same erased width, so the scale anchor is
+indifferent. Two residuals, stated: a gap in only ONE pane keeps its channel alive here (an uneven
+pierce), and the assembler's absolute 0.60 m per-side floor drops it, phantom door and all; and a
+channel wider than about four pane widths (a fine pen outlining a very thick wall) still mints a
+room, backstopped by the same floor. A wall thicker than `6*stroke` is a different failure: its
+crossings are dropped whole at extraction and the wall goes missing, no bogus room involved.
 
 **Photographs are handled at the front.** The skew search runs coarse-to-fine (one-degree steps
 across four degrees, then quarter-degree steps around the winner) and the correction rotates the

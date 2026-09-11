@@ -81,7 +81,8 @@ public static class SketchWallGraph
 
         result.hCover = hFinal;
         result.vCover = vFinal;
-        result.cells = SketchCellMap.Build(grid.vLines, grid.hLines, hFinal, vFinal, stroke);
+        result.cells = SketchCellMap.Build(grid.vLines, grid.hLines, hFinal, vFinal, stroke,
+                                           result.doorways);
         int maxTol = 3 * stroke;   // the last rung: what escalation could still repair
         result.clean = result.cells.roomCount > 0
                     && !LeakSignals(result.cells, hFinal, horizontal: true, stroke, longEdge, maxTol)

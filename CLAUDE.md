@@ -128,9 +128,13 @@ Each of these was argued out; the reasoning is in the linked notes.
 - **`Assets/Resources/PrefabRegistry.asset` is never touched**; ResidenceViz uses
   `ResidenceCatalogRegistry.asset`. → furniture
 - **`Tile_Bath` is never a floor**; `Wall_Edge` does not move; the sun stays at its exposure. → walls-and-rooms, view-and-people
-- **14 catalog items stay labeled boxes**: `wheelchair`, `walker`, `hospital_bed`, `transfer_bench`,
-  `patient_lift`, `shower_seat`, `roll_in_shower`, `grab_bar_24`, `grab_bar_36`, `handrail`,
-  `light_switch`, `outlet`, `thermostat`, `threshold_ramp`. No `shower_seat` in any sample. → furniture
+- **Medical equipment, rails and sub-decimetre plates stay labeled boxes**, and so does anything
+  added later with no honest donor: neither pack has the art, and a stretched anything reads worse
+  than a bar. **A box is a supported state, never a gap**; every case carries its reason in
+  `CatalogArtBinder`'s header. No `shower_seat` in any sample. → furniture
+- **`FurnitureCatalog.asset` is the catalog's one source of truth**; `SampleFurniture.cs` is
+  generated from it, asset row order is the picker's order, and **`MountType.Counter`/`Ceiling` are
+  inert** (a counter-top item is a Wall mount at counter height). → furniture
 - **Occlusion within a room is not modelled** in coverage; **openings in perpendicular walls are not
   considered** by the fits; `PlanBuilder.Free` is unguarded; wall mounts do not check each other. → smart-living, samples-and-planbuilder
 - **Deleted, not deprecated**: `Mode.Plan`, `WallDef.structural`, `OpeningDef.swing`,
@@ -146,6 +150,13 @@ Each of these was argued out; the reasoning is in the linked notes.
   ground painting, scatter, lot editing.
 - **`ReportCapture` keeps its own orthographic plan camera** although Plan view mode is gone. → view-and-people
 - **Clock follows the units chip** (metric ⇒ 24-hour). → ui
+- **`ExitPrompt` is the app's one modal**, and Esc's **fourth** rung. Quitting has no rail to confirm
+  in, so the two-click in-rail confirm does not fit it; `GUI.enabled = false` around the rails is what
+  makes it modal, `Application.wantsToQuit` routes the window's X and Alt+F4 through the same
+  question (let straight through under `UNITY_EDITOR`, or Stop stops working), and the same card
+  guards the three acts that swap the document over unsaved work. The build ships **windowed**
+  (`fullscreenMode: 3`, resizable, 1600 x 900): borderless fullscreen left no way out at all.
+  → ui, workflow-and-tools
 
 ## Rules-ready, but no rules
 

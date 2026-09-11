@@ -121,7 +121,13 @@ sibling of Read the plan: same seam (`SketchPlanSpec` → `Compile` → `Adopt`)
   that missed a perpendicular line, and both tolerate the few-pixel offsets a photographed sketch
   always has. Rooms are the bounded cells of the closed arrangement (`SketchCellMap`), on
   centerlines **by construction**; the row sweep cuts a cell into at most 4 rectangles (root plus
-  parts), bounding box plus warning past that. Openings are believed only after the mask verifies
+  parts), bounding box plus warning past that. **A room every cell of which is a sealed strip or a
+  junction folds back into wall** (a thick or double-line wall's channel is not a room): thin means
+  at most `max(3*stroke, 4x the thinner flank's measured thickness)`, and a doorway piercing ONE
+  flank keeps the strip (a walk-in) while piercing BOTH is a door through the assembly and still
+  folds. Opening probes step across folded cells and re-verify the slab across the whole assembly;
+  twin candidates from a double line's two panes dedup to the first in wall order. Openings are
+  believed only after the mask verifies
   the gap and the cell map names its two sides (`SketchOpeningReader`); windows are the double-line
   marks the extraction already measured, trusted only with the outside on one side. Text, arrows
   and small symbols are removed first (`SketchMaskCleanup`: no long straight run and a small box);

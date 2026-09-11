@@ -196,6 +196,44 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
 
     private readonly TimelineBar _timeline = new TimelineBar();
 
+    // The one modal in the app. See ExitPrompt for why quitting gets one when nothing else here does.
+    private readonly ExitPrompt _exitPrompt = new ExitPrompt();
+
+    /// <summary>Whether the exit prompt is up. While it is, it owns the window and every key.</summary>
+    public bool ExitPromptOpen { get; private set; }
+
+    private ExitPrompt.Intent _exitIntent;
+
+    // Whether there was unsaved work when the card went up. See RequestExitPrompt for why this is
+    // latched rather than read live.
+    private bool _exitDirty;
+
+    // Which residence an OpenResidence intent lands on once the question is answered. Deliberately
+    // NOT cleared by AfterOpen the way _confirmReset is: this one has to survive the document swap
+    // it is the authorization for.
+    private string _exitTargetId;
+
+    // The click lands here and Update applies it, like every other request in this file. Quitting
+    // from inside OnGUI would tear the IMGUI pass down under itself.
+    private ExitPrompt.Answer? _pendingExitAnswer;
+
+    // Set by the wantsToQuit handler, which fires on whatever frame the window's X was pressed.
+    private bool _pendingExitPrompt;
+
+    // Set immediately before Application.Quit so the wantsToQuit handler lets the second pass
+    // through instead of asking the question it has already had answered.
+    private bool _quitConfirmed;
+
+    // Swapping the document rebuilds both rails, so an open requested from a library row queues here
+    // like every other control-count change. These carry the request whether or not the prompt was
+    // involved: with nothing unsaved there is no question to ask and the row still cannot act inline.
+    private string _pendingOpenId;
+    private bool _pendingNewResidence;
+
+    // A stage to land on after the open, for the one caller that has to beat NewResidence's own
+    // choice of Structure. See RequestNewResidence.
+    private ResidenceStage? _afterOpenStage;
+
     // Draws the current selection in the scene. A plain class like TimelineBar and UITheme, and
     // owned here rather than by SelectTool because the highlight follows the SELECTION, which every
     // tool can set, not the active tool. See SelectionOverlay for why it cannot live in a tool.
@@ -275,11 +313,38 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
         // A room is not a site. The stock 2 m floor on the handle radius would draw a 0.51 m toilet's
         // gizmo four times the size of the toilet and clean across the bathroom.
         _gizmo.minHandleSize = 0.35f;
+        // Yaw is the only rotation this app applies (OnGizmoRotate), so the X and Z rings were two
+        // handles that did nothing when dragged.
+        _gizmo.yawOnly = true;
         _gizmo.enabled = false;
         _gizmo.MoveDelta   += OnGizmoMove;
         _gizmo.RotateDelta += OnGizmoRotate;
         _gizmo.ScaleDelta  += OnGizmoResize;
         _gizmo.DragEnded   += OnGizmoDragEnded;
+    }
+
+    // Every way out goes through one question. Esc is the one people are told about, but the window's
+    // X button and Alt+F4 are what somebody who does not know the app will actually reach for, and
+    // those two are precisely the ones that used to discard unsaved work without a word.
+    private void OnEnable()  => Application.wantsToQuit += OnWantsToQuit;
+    private void OnDisable() => Application.wantsToQuit -= OnWantsToQuit;
+
+    private bool OnWantsToQuit()
+    {
+#if UNITY_EDITOR
+        // THE EDITOR IS NOT A WINDOW ANYBODY IS CLOSING. Unity raises this when play mode ends, so a
+        // veto here would leave the Stop button doing nothing at all and the Editor needing to be
+        // killed to get out. Let it straight through: in the Editor, Esc is how the card is reached,
+        // and the X-button route is a build-only path by construction.
+        return true;
+#else
+        if (_quitConfirmed) return true;   // already asked, already answered
+
+        // Raised from Update, like every other deferred change: this can fire on any frame, and
+        // opening the card rewrites what the whole window draws.
+        _pendingExitPrompt = true;
+        return false;                      // veto this one, and ask
+#endif
     }
 
     private void Register(IResidenceTool tool) => _tools.Add(tool);
@@ -372,6 +437,46 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
             viewController?.SetMode(mode);
         }
 
+        if (_pendingExitPrompt)
+        {
+            _pendingExitPrompt = false;
+            RequestExitPrompt(ExitPrompt.Intent.Quit);
+        }
+
+        if (_pendingExitAnswer.HasValue)
+        {
+            var answer = _pendingExitAnswer.Value;
+            _pendingExitAnswer = null;
+            ApplyExitAnswer(answer);
+        }
+
+        if (!string.IsNullOrEmpty(_pendingOpenId) || _pendingNewResidence)
+        {
+            string id = _pendingOpenId;
+            bool fresh = _pendingNewResidence;
+            var then = _afterOpenStage;
+            _pendingOpenId = null;
+            _pendingNewResidence = false;
+            _afterOpenStage = null;
+
+            if (fresh) NewResidence(); else OpenResidence(id);
+
+            // After the open, so it beats the stage the open picked for itself. NewResidence asks for
+            // Structure through the same queue, and that request is still sitting in _pendingStage
+            // waiting for the next frame, so it has to be dropped rather than merely outrun.
+            if (then.HasValue)
+            {
+                _pendingStage = null;
+                SetStage(then.Value);
+            }
+        }
+
+        // BEFORE the Doc == null return below, and that placement is the point. An empty library is
+        // the one state in which the Esc ladder has no rung to offer, and it is also the state
+        // somebody is most likely to be in when they want out of the app. Esc did nothing at all
+        // there until now.
+        if (HandleExitKeys()) return;
+
         if (Doc == null) return;
 
         RefreshChangeCount();
@@ -403,6 +508,10 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
                 _furniturePending = false;
                 CommitFurnitureEdit(SelectedFurniture());
             }
+
+            // Belt and braces: DragEnded is the gizmo's own close, but a gesture that never came from
+            // the gizmo must not leave this latched, or the next real handle drag skips its undo entry.
+            _gizmoGesture = false;
         }
     }
 
@@ -475,13 +584,21 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
             if (kb.sKey.wasPressedThisFrame) SaveResidence();
         }
 
-        // Two rungs, in that order. Esc has always meant "deselect" and that gesture is used constantly,
-        // so it keeps the first press; only once there is nothing selected does a second press leave the
-        // Select tab and hand you back the stage you were working in.
+        // Four rungs, in that order. Whatever the tool is holding but has not committed goes first (the
+        // furniture tool's armed catalog item: with one armed, every click places, and until now
+        // nothing put it down). Then deselect, which Esc has always meant and which is used constantly;
+        // only once there is nothing selected does a press leave the Select tab and hand you back the
+        // stage you were working in. Not gated on the pointer: Esc over the rail cancels too.
+        //
+        // The fourth rung asks to close the app, and it is reached only once the other three have
+        // nothing left to do. That ordering is the whole safety of it: a press that had work to
+        // cancel still cancels the work, so nobody meets this prompt mid-wall.
         if (kb.escapeKey.wasPressedThisFrame)
         {
-            if (!string.IsNullOrEmpty(SelectedId)) ClearSelection();
+            if (_active != null && _active.Cancel()) { }
+            else if (!string.IsNullOrEmpty(SelectedId)) ClearSelection();
             else if (_stage == ResidenceStage.Select && _stageBefore.HasValue) RequestStage(_stageBefore.Value);
+            else RequestExitPrompt(ExitPrompt.Intent.Quit);
         }
 
         // F frames whatever is selected: a person, a wall, a room, an item. Same call the People
@@ -559,11 +676,10 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
         if (!ReferenceEquals(go, _gizmoTarget)) { _gizmoTarget = go; _gizmo.SetTarget(go, cam); }
         _gizmo.SetMode(TransformMode);
 
-        // Shift SNAPS here, which is the opposite of Shift in the drawing tools, where it means draw
-        // free. That inversion is the Site tool's and it is deliberate: while drawing, snapping is the
-        // default you occasionally want out of; while transforming, free is the default you
-        // occasionally want quantized.
-        _gizmo.rotationSnap = _ctx.ShiftHeld ? ROTATION_SNAP_DEG : 0f;
+        // Shift means FREE, here as everywhere else in ResidenceViz. The ring used to invert that (the
+        // Site tool's convention: free by default, Shift to snap), which left the app with two rules
+        // for one key. Now the ring steps like the Facing field and Shift releases both.
+        _gizmo.rotationSnap = _ctx.ShiftHeld ? 0f : ROTATION_SNAP_DEG;
 
         // Not gated outright on PointerOverUI: ViewController gates only the START of a camera drag,
         // so a look or a pan already in flight carries on across a rail, and the handles have to keep
@@ -572,7 +688,7 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
         _gizmo.Tick(acceptInput: !PointerOverUI);
     }
 
-    private const float ROTATION_SNAP_DEG = 15f;
+    private const float ROTATION_SNAP_DEG = ResidenceConventions.FACING_STEP_DEG;
 
     /// <summary>The selected item, when the selection is a piece of floor furniture.</summary>
     private ObjectInstance SelectedFurniture()
@@ -591,20 +707,50 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
     // means a full Rebuild(), which would allocate a material per item per frame and destroy the very
     // object the gizmo is dragging. The rebuild happens once, on release.
 
+    // Where the cursor has actually dragged the item to, before snapping. Accumulated raw for the
+    // reason TransformGizmo accumulates _rotRaw: snapping the stored position and then adding the
+    // next delta to it would make the wall sticky, the item unable to leave until the cursor had
+    // travelled the whole snap range again.
+    private Vector2 _moveRaw;
+
     private void OnGizmoMove(Vector3 delta)
     {
         var item = SelectedFurniture();
         if (item?.position == null || item.position.Length < 3) return;
 
+        if (!_gizmoGesture) _moveRaw = new Vector2(item.position[0], item.position[2]);
         BeginGizmoGesture("Move furniture");
 
         // Furniture stands on the floor. The gizmo offers a Y arrow because a site object can sit on a
         // slope; here the story's elevation is the only legal height, so the vertical is dropped
         // rather than hidden: an item half-sunk into its own floor is not a placement.
-        item.position[0] += delta.x;
-        item.position[2] += delta.z;
+        _moveRaw.x += delta.x;
+        _moveRaw.y += delta.z;
+
+        Vector2 at = SnapToWall(_moveRaw, item, item.rotationY);
+        item.position[0] = at.x;
+        item.position[2] = at.y;
 
         residenceRenderer?.PoseFurnitureGO(item);
+    }
+
+    /// <summary>
+    /// The placement rule shared by the ghost and the move handle: flush against a wall face within
+    /// <see cref="ResidenceConventions.FURNITURE_SNAP_RANGE"/>, Shift for free, Ctrl to pull from as
+    /// far as <see cref="ResidenceConventions.MOUNT_REACH"/>. Shift wins when both are held.
+    /// </summary>
+    public Vector2 SnapToWall(Vector2 raw, ObjectInstance item, float yaw)
+    {
+        Vector3 size = FurnitureSize(item);
+        return SnapToWall(raw, size.x, size.z, yaw);
+    }
+
+    public Vector2 SnapToWall(Vector2 raw, float widthM, float depthM, float yaw)
+    {
+        if (Level == null || _ctx.ShiftHeld) return raw;
+        float range = _ctx.CtrlHeld ? ResidenceConventions.MOUNT_REACH
+                                    : ResidenceConventions.FURNITURE_SNAP_RANGE;
+        return FurnitureSnap.ToWall(raw, widthM, depthM, yaw, Level, range).position;
     }
 
     private void OnGizmoRotate(Vector3 eulerDelta)
@@ -612,14 +758,71 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
         var item = SelectedFurniture();
         if (item == null) return;
 
-        BeginGizmoGesture("Rotate furniture");
-
         // Yaw only. A tipped-over bed is not a proposal, and every footprint in this app. FurnitureFit,
         // ResidenceMetrics, SelectionOverlay, the occupancy checks. Is computed from rotationY alone, so an
         // X or Z tilt would show on screen and in none of the numbers.
-        item.rotationY = Mathf.Repeat(item.rotationY + eulerDelta.y, 360f);
+        BeginGizmoGesture("Rotate furniture");
+        RotateFurniture(item, item.rotationY + eulerDelta.y, discrete: false);
+    }
 
-        residenceRenderer?.PoseFurnitureGO(item);
+    // ---- turning, and staying against the wall -------------------------------------------------
+
+    // Which wall, or which corner, the item was flush with when the current edit began, read ONCE
+    // before the first write. A bed against a wall that turns a quarter about its center has swapped
+    // width and depth, and the gap that opens (or the overlap that closes) is half their difference,
+    // far more than any snap range; the only way to keep it flush is to remember the wall and snap
+    // back to it on commit. A bed in a CORNER needs both walls remembered, or the turn seats it on the
+    // one and drives it through the other. `_flushChecked` is its own field because Against
+    // legitimately answers nothing and "checked, not flush" has to be told apart from "not checked
+    // yet".
+    private bool _flushChecked;
+    private string _flushWallId;
+    private string _flushWallId2;
+
+    /// <summary>
+    /// Remembers the wall, or corner, <paramref name="item"/> sits flush against, once per edit. Every
+    /// path that changes an item's shape (turn, resize) calls this before its first write; the commit
+    /// reads it.
+    /// </summary>
+    // Not called from OnGizmoMove on purpose: a move is snapped every frame already, so the commit
+    // sees nothing captured and just refits.
+    public void CaptureFlush(ObjectInstance item)
+    {
+        if (_flushChecked || item?.position == null || item.position.Length < 3 || Level == null) return;
+        _flushChecked = true;
+
+        Vector3 size = FurnitureSize(item);
+        var flush = FurnitureSnap.Against(new Vector2(item.position[0], item.position[2]),
+                                          size.x, size.z, item.rotationY, Level,
+                                          ResidenceConventions.FURNITURE_FLUSH_TOL);
+        _flushWallId = flush.wall?.id;
+        _flushWallId2 = flush.wall2?.id;
+    }
+
+    /// <summary>
+    /// The one place a furniture item's yaw is written: the keys, the quarter buttons, the Facing
+    /// field and the ring all come here, so all four keep the item against its wall.
+    /// </summary>
+    /// <param name="discrete">True for a key or a button (one undo entry, committed now); false for a
+    /// drag (a gesture already opened by the caller, committed on release).</param>
+    public void RotateFurniture(ObjectInstance item, float newYaw, bool discrete)
+    {
+        if (item == null) return;
+
+        CaptureFlush(item);
+        if (discrete) RecordDocEdit("Rotate furniture");
+
+        item.rotationY = Mathf.Repeat(newYaw, 360f);
+
+        if (discrete)
+        {
+            CommitFurnitureEdit(item);
+        }
+        else
+        {
+            residenceRenderer?.PoseFurnitureGO(item);
+            NoteFurnitureEdit();
+        }
     }
 
     private void OnGizmoResize(float delta)
@@ -627,6 +830,7 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
         var item = SelectedFurniture();
         if (item == null) return;
 
+        CaptureFlush(item);
         BeginGizmoGesture("Resize furniture");
 
         // The gizmo emits an ADDITIVE scale delta, because a site instance carries a uniform `scale`
@@ -664,7 +868,25 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
     /// </summary>
     public void CommitFurnitureEdit(ObjectInstance item)
     {
-        if (item == null) return;
+        if (item == null) { _flushChecked = false; _flushWallId = null; _flushWallId2 = null; return; }
+
+        // Back against the wall, or the corner, it started on, BEFORE the fit: the fit slides along
+        // the wall, so flushness survives it, while the other order would let the fit undo the snap.
+        // Shift held at the release means free, the same as it does mid-drag.
+        if (_flushWallId != null && !_ctx.ShiftHeld && Level != null
+            && item.position != null && item.position.Length >= 3)
+        {
+            Vector3 size = FurnitureSize(item);
+            var snap = FurnitureSnap.ToWall(new Vector2(item.position[0], item.position[2]),
+                                            size.x, size.z, item.rotationY, Level,
+                                            float.PositiveInfinity, _flushWallId, _flushWallId2);
+            item.position[0] = snap.position.x;
+            item.position[2] = snap.position.y;
+        }
+        _flushChecked = false;
+        _flushWallId = null;
+        _flushWallId2 = null;
+
         RefitFurniture(item);
         MarkDirty();
         residenceRenderer?.RebuildFurniture();
@@ -748,6 +970,169 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
 
     public void RefreshLibrary() => _library = ResidenceStore.List();
 
+    // ---------------------------------------------------------------------------------------
+    // Leaving: the exit prompt
+    //
+    // Four acts drop unsaved work: quitting, opening another residence, starting a new one and
+    // importing one. The last three all end in AfterOpen, which clears Dirty. They ask one question
+    // through one prompt, because they ARE one question.
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Raise the prompt. Safe to call from anywhere including OnGUI: it only sets flags, and the
+    /// prompt itself is drawn from OnGUI and applied from Update.
+    /// </summary>
+    private void RequestExitPrompt(ExitPrompt.Intent intent, string targetId = null)
+    {
+        if (ExitPromptOpen) return;
+
+        _exitIntent = intent;
+        _exitTargetId = targetId;
+        ExitPromptOpen = true;
+
+        // Latched, and never re-read while the card is up. The muted line naming the residence is
+        // drawn only when there is something to lose, so a Dirty that changed between a frame's
+        // layout pass and its repaint pass would change the card's control count: the exact fault
+        // every _pending* flag in this file exists to avoid. Nothing can dirty the document behind
+        // the card anyway, which is what makes latching free.
+        _exitDirty = Doc != null && Dirty;
+
+        // One armed confirmation at a time, and the rail it lives in is about to go grey.
+        _confirmReset = false;
+
+        // The card takes the keyboard. See ExitPrompt.Reset.
+        _exitPrompt.Reset();
+    }
+
+    /// <summary>
+    /// The prompt's own keys, and the one Esc case the three-rung ladder cannot reach. Returns true
+    /// when this frame belongs to the prompt and the rest of Update should not run.
+    ///
+    /// Called BEFORE Update's Doc == null return. See the call site.
+    /// </summary>
+    private bool HandleExitKeys()
+    {
+        var kb = Keyboard.current;
+        if (kb == null) return ExitPromptOpen;
+
+        // The file browser is a uGUI canvas from SimpleFileBrowser and the only other blocking UI in
+        // the app. It is not in PointerOverUI and it owns Esc while it is up, so stacking a second
+        // modal behind it would leave two dialogs fighting over one key.
+        if (FileBrowser.IsOpen) return ExitPromptOpen;
+
+        if (ExitPromptOpen)
+        {
+            // Esc closes what Esc opened, which is what Esc means everywhere else in this app.
+            if (kb.escapeKey.wasPressedThisFrame)
+                _pendingExitAnswer = ExitPrompt.Answer.KeepWorking;
+            // Enter takes the answer that loses nothing. A blind confirm should land on the safe one.
+            else if (kb.enterKey.wasPressedThisFrame || kb.numpadEnterKey.wasPressedThisFrame)
+                _pendingExitAnswer = ExitPrompt.Answer.SaveAndGo;
+
+            return true;
+        }
+
+        // With no residence open the ladder in HandleGlobalKeys never runs at all, because Update
+        // returns above it. This is that gap: an empty library still answers Esc.
+        if (Doc == null && !TypingInUI && kb.escapeKey.wasPressedThisFrame)
+        {
+            RequestExitPrompt(ExitPrompt.Intent.Quit);
+            return true;
+        }
+
+        return false;
+    }
+
+    private void ApplyExitAnswer(ExitPrompt.Answer answer)
+    {
+        if (answer == ExitPrompt.Answer.KeepWorking)
+        {
+            // The follow-up stage belonged to the open that was just declined. Left set, it would
+            // land on whichever open happened next.
+            _afterOpenStage = null;
+            CloseExitPrompt();
+            return;
+        }
+
+        // Gated on Dirty, not just on the answer. ResidenceStore.Save bumps doc.version and rewrites
+        // the file, so saving a document that is already on disk would quietly advance the number the
+        // library row prints for no change at all. The button is still offered either way, because it
+        // is the same three answers every time and a button that appears and vanishes is worse.
+        if (answer == ExitPrompt.Answer.SaveAndGo && _exitDirty && !SaveResidence())
+        {
+            // The write failed and Status is already saying why, over the scrim. Leave the card up:
+            // the three answers are still the right three, and going on from here would destroy
+            // exactly the work this answer promised to keep.
+            return;
+        }
+
+        var intent = _exitIntent;
+        string target = _exitTargetId;
+        CloseExitPrompt();
+
+        switch (intent)
+        {
+            case ExitPrompt.Intent.OpenResidence:   _pendingOpenId = target; break;
+            case ExitPrompt.Intent.NewResidence:    _pendingNewResidence = true; break;
+            case ExitPrompt.Intent.ImportResidence: ImportResidence(); break;
+            default:                                Quit(); break;
+        }
+    }
+
+    private void CloseExitPrompt()
+    {
+        ExitPromptOpen = false;
+        _exitTargetId = null;
+        _exitDirty = false;
+    }
+
+    private void Quit()
+    {
+        // Read by the wantsToQuit handler, which Application.Quit is about to call. Without it that
+        // handler would veto our own quit and put the card straight back up.
+        _quitConfirmed = true;
+
+#if UNITY_EDITOR
+        // Application.Quit does nothing under the Editor, so the button would read as broken in the
+        // one place this gets developed.
+        UnityEditor.EditorApplication.isPlaying = false;
+#else
+        Application.Quit();
+#endif
+    }
+
+    /// <summary>
+    /// A library row, or "New residence". Both swap the document, so both ask first when there is
+    /// unsaved work, and both queue rather than act: they rebuild the rail they were clicked in.
+    /// </summary>
+    private void RequestOpenResidence(string id)
+    {
+        if (Dirty) RequestExitPrompt(ExitPrompt.Intent.OpenResidence, id);
+        else _pendingOpenId = id;
+    }
+
+    /// <param name="then">
+    /// A stage to land on once the residence exists, overriding the Structure that NewResidence
+    /// chooses. The empty library's "Start from a floor plan" is the one caller: it has to win over
+    /// NewResidence's own choice, and it can no longer do that by simply running second.
+    /// </param>
+    private void RequestNewResidence(ResidenceStage? then = null)
+    {
+        _afterOpenStage = then;
+        if (Dirty) RequestExitPrompt(ExitPrompt.Intent.NewResidence);
+        else _pendingNewResidence = true;
+    }
+
+    /// <summary>
+    /// Import asks BEFORE the file browser opens. Asking afterwards would mean putting this prompt
+    /// up over a document already chosen, and two decisions stacked on one action.
+    /// </summary>
+    private void RequestImportResidence()
+    {
+        if (Dirty) RequestExitPrompt(ExitPrompt.Intent.ImportResidence);
+        else ImportResidence();
+    }
+
     public void NewResidence()
     {
         Doc = ResidenceStore.Create("Untitled residence");
@@ -778,22 +1163,41 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
         SyncStages();   // this residence may or may not have an exterior; the command bar follows it
 
         residenceRenderer?.RenderResidence(Doc, Doc.activeVariantId, LevelIndex);
+        SyncUnderlayQuad();
         viewController?.FrameContent();
 
         ResidenceStore.Settings.lastOpenedResidenceId = Doc.id;
         ResidenceStore.SaveSettings();
     }
 
-    public void SaveResidence()
+    /// <summary>
+    /// The sketch quad belongs to UnderlayTool and outlives that tool's Exit so plans can be traced
+    /// over from every stage, but the tool only refreshes it while active. Anything that swaps the
+    /// document or the story out from under an inactive tool must call this, or the previous
+    /// floorplan stays on the ground.
+    /// </summary>
+    private void SyncUnderlayQuad() => (FindTool("underlay") as UnderlayTool)?.SyncQuad();
+
+    /// <summary>
+    /// Writes the open residence. Returns whether it reached disk.
+    ///
+    /// The return value exists for save-and-exit. A failed write used to vanish into a four second
+    /// toast, which is survivable while the app stays open and is not survivable at all if the next
+    /// thing that happens is Application.Quit.
+    /// </summary>
+    public bool SaveResidence()
     {
-        if (Doc == null) return;
+        if (Doc == null) return true;   // nothing to write is not a failure
         if (ResidenceStore.Save(Doc, out string err))
         {
             Dirty = false;
             RefreshLibrary();
             Status("Saved " + Doc.name);
+            return true;
         }
-        else Status("Save failed: " + err);
+
+        Status("Save failed: " + err);
+        return false;
     }
 
     public void MarkDirty() => Dirty = true;
@@ -833,6 +1237,7 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
         ClearSelection();
         History.Clear();
         residenceRenderer?.RenderResidence(Doc, Doc.activeVariantId, index);
+        SyncUnderlayQuad();   // each story has its own sketch, and the floor chip works from any stage
         viewController?.FrameContent();
         Status("Now on " + LevelName(index) + ".");
     }
@@ -1037,7 +1442,12 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
             : Rect.zero;
 
         Vector2 m = Event.current.mousePosition;
-        PointerOverUI = _leftRect.Contains(m) || _rightRect.Contains(m) || _topRect.Contains(m)
+        // The prompt claims the WHOLE window, which is the same rule every other panel here follows,
+        // applied to a panel that happens to cover everything: a rect the pointer test does not know
+        // about is a rect every click falls straight through. Without this, pressing Exit would also
+        // place a wall under the button, and a right-drag beside the card would orbit the camera.
+        PointerOverUI = ExitPromptOpen
+                        || _leftRect.Contains(m) || _rightRect.Contains(m) || _topRect.Contains(m)
                         || (bandH > 0f && _modeRect.Contains(m))
                         || (barH > 0f && _timelineRect.Contains(m));
 
@@ -1045,6 +1455,15 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
         // than by the list that sets it, so a selection change to something with no list cannot leave
         // a highlight burning in the plan.
         HoverOpeningId = null;
+
+        // DISABLED, not merely covered, and this line is what makes the exit prompt a modal.
+        //
+        // IMGUI hands a mouse event to the FIRST control that claims it, and these rails are drawn
+        // before the card is. A card painted on top of them would look modal and answer to nothing:
+        // the click on "Save and exit" would be eaten by whichever rail button happened to sit under
+        // it. GUI.enabled = false makes these controls claim nothing, while still allocating their
+        // control IDs, so the layout pass and the repaint pass go on agreeing.
+        GUI.enabled = !ExitPromptOpen;
 
         DrawLeftRail();
         DrawTopBar();
@@ -1072,6 +1491,14 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
 
         if (Doc != null && !PointerOverUI) _active?.DrawOverlay();
 
+        GUI.enabled = true;
+
+        // Over everything: the rails, the mode band, the timeline and every scene overlay.
+        DrawExitPrompt(w, h);
+
+        // AFTER the prompt, deliberately. Status is how a failed save reports itself, and answering
+        // "Save and exit" on a disk that refuses the write is exactly the moment the message has to
+        // be readable. Drawn before the card it would be behind the scrim.
         DrawStatus();
 
         // Last, after every EndArea: a tip drawn inside a layout area would be clipped to it, and one
@@ -1212,11 +1639,11 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
         UITheme.Gap();
 
         GUILayout.BeginHorizontal();
-        if (UITheme.PrimaryButton("New residence")) NewResidence();
+        if (UITheme.PrimaryButton("New residence")) RequestNewResidence();
         UITheme.Tip("Start a dwelling with one plain room to build from. Import a floor plan next if "
                     + "you have one.");
         // Same height as the primary beside it: a 44 px button next to a 30 px one reads as a mistake.
-        if (UITheme.SecondaryButton("Import", GUILayout.Height(UITheme.PrimaryH))) ImportResidence();
+        if (UITheme.SecondaryButton("Import", GUILayout.Height(UITheme.PrimaryH))) RequestImportResidence();
         UITheme.Tip("Open a .riv archive someone sent you");
         GUILayout.EndHorizontal();
 
@@ -1236,11 +1663,12 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
         // everything, since the samples are only seeded once.
         if (_library.Count == 0)
         {
+            // Import rather than the Structure that NewResidence lands on. It cannot be a RequestStage
+            // here any more: the open is deferred now, and _pendingStage drains BEFORE it, so a stage
+            // asked for here would be spent before NewResidence overwrote it with its own. The
+            // follow-up rides along with the request instead, and is applied after it.
             if (UITheme.SecondaryButton("Start from a floor plan"))
-            {
-                NewResidence();
-                RequestStage(ResidenceStage.Import);
-            }
+                RequestNewResidence(ResidenceStage.Import);
             UITheme.Tip("No residences yet. This starts one and takes you straight to importing a plan "
                         + "sketch and setting its scale, so everything traced afterwards is at true "
                         + "size. Or open a sample above to look around a finished plan first.");
@@ -1256,7 +1684,7 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
             bool open = UITheme.StateRow(label,
                 $"v{row.version} · {row.variantCount} variant{(row.variantCount == 1 ? "" : "s")}", isOpen);
             UITheme.Tip(isOpen ? "The residence you have open" : $"Open {row.name}");
-            if (open) OpenResidence(row.id);
+            if (open) RequestOpenResidence(row.id);
         }
         UITheme.EndScroll();
 
@@ -1894,6 +2322,7 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
         ResidenceStore.Archive(Doc.id);
         Doc = null;
         residenceRenderer?.RenderResidence(null);
+        SyncUnderlayQuad();
         RefreshLibrary();
         Status("Archived.");
     }
@@ -1994,6 +2423,22 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
     // UITheme's near-black Ink (the colour every rail uses because every rail is light paper) and was
     // therefore invisible against a wall. Routing it through the same renderer as the tooltips gives it
     // its own contrast and one visual language for everything transient that floats over the scene.
+    private void DrawExitPrompt(float w, float h)
+    {
+        if (!ExitPromptOpen) return;
+
+        // Drop whatever the dimmed rails claimed on the way past: UITooltip is a hover tracker over
+        // rects, and GUI.enabled does not stop a rect containing the cursor. A tooltip describing a
+        // control that cannot be pressed is noise.
+        UITooltip.BeginFrame();
+
+        _exitPrompt.Draw(new Rect(0f, 0f, w, h), _exitIntent, _exitDirty, Doc?.name);
+
+        // Queued, never applied here. Quitting or swapping the document mid-layout is the whole
+        // reason every request in this file is deferred.
+        if (_exitPrompt.Picked.HasValue) _pendingExitAnswer = _exitPrompt.Picked;
+    }
+
     private void DrawStatus()
     {
         if (string.IsNullOrEmpty(_status) || Time.realtimeSinceStartup > _statusUntil) return;

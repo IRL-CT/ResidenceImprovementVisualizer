@@ -650,6 +650,8 @@ public static class SketchPlanDetector
         // Judge the rectangles in metres: a "room" smaller than a bed or thinner than a passage is a
         // symbol or a wall channel, unless its door was verified and the whole room stays inside the
         // closet band. The per-side floor is absolute: the regularizer drops thinner rooms anyway.
+        // It is also the backstop for the one wall channel the cell map's sealed-strip fold cannot
+        // reach: a fine pen outlining a wall more than four pane widths thick.
         // A dropped root orphans its parts, which then stand as rooms of their own if they are big
         // enough: still floor, just no longer an L.
         float minSide = SketchRegularizer.MinRoomSide;

@@ -14,7 +14,8 @@ using UnityEngine.InputSystem;
 // Handles:
 //   - X arrow (red) / Z arrow (blue)  → axis-constrained move
 //   - center pad (yellow square)      → free move on the ground plane
-//   - three rings (R/G/B)             → rotate around world X / Y / Z (snap via rotationSnap)
+//   - three rings (R/G/B)             → rotate around world X / Y / Z (snap via rotationSnap);
+//                                        only the Y ring when yawOnly is set
 //   - top cube (purple)               → uniform scale (drag up/down)
 // A yellow wire box around the selection bounds is drawn as part of the gizmo.
 //
@@ -39,6 +40,11 @@ public class TransformGizmo : MonoBehaviour
     // Rotation drags snap to this increment (degrees) when > 0; <= 0 = free rotation. The
     // caller may retune it every frame (EditController: 15° only while Shift is held).
     public float rotationSnap = 15f;
+
+    // Draw and pick only the Y ring. ResidenceViz applies yaw alone (a tipped-over bed is not a
+    // proposal), so its X and Z rings were two handles that did nothing when dragged. Off by
+    // default: a site object can lean.
+    public bool yawOnly = false;
 
     // Floor on the handle radius, in meters. The gizmo is sized from the selection's bounds,
     // but a small object still needs handles big enough to grab. Hence a minimum. 2 m is the
@@ -269,8 +275,10 @@ public class TransformGizmo : MonoBehaviour
     private Handle PickRotate(Vector2 mp)
     {
         // Pick the nearest of the three axis circles under the cursor.
-        float eX = RingError(mp, Vector3.right);
         float eY = RingError(mp, Vector3.up);
+        if (yawOnly) return eY == float.MaxValue ? Handle.None : Handle.RotateY;
+
+        float eX = RingError(mp, Vector3.right);
         float eZ = RingError(mp, Vector3.forward);
         float best = Mathf.Min(eX, Mathf.Min(eY, eZ));
         if (best == float.MaxValue) return Handle.None;
@@ -498,7 +506,7 @@ public class TransformGizmo : MonoBehaviour
 
         // Only the active tool's handles are visible.
         _xLine.enabled = move; _yLine.enabled = move; _zLine.enabled = move; _padLine.enabled = move;
-        _ringXLine.enabled = rot; _ringYLine.enabled = rot; _ringZLine.enabled = rot;
+        _ringYLine.enabled = rot; _ringXLine.enabled = rot && !yawOnly; _ringZLine.enabled = rot && !yawOnly;
         _stemLine.enabled = scale; _scaleCube.gameObject.SetActive(scale);
 
         if (move)
@@ -526,10 +534,13 @@ public class TransformGizmo : MonoBehaviour
             // vertical rings sit on the true center.
             FillRing(_ringYPts, c,       Vector3.right,   Vector3.forward, s);
             Apply(_ringYLine, _ringYPts, w, Col(Handle.RotateY, COL_RINGY));
-            FillRing(_ringXPts, _center, Vector3.forward, Vector3.up,      s);
-            Apply(_ringXLine, _ringXPts, w, Col(Handle.RotateX, COL_RINGX));
-            FillRing(_ringZPts, _center, Vector3.right,   Vector3.up,      s);
-            Apply(_ringZLine, _ringZPts, w, Col(Handle.RotateZ, COL_RINGZ));
+            if (!yawOnly)
+            {
+                FillRing(_ringXPts, _center, Vector3.forward, Vector3.up,      s);
+                Apply(_ringXLine, _ringXPts, w, Col(Handle.RotateX, COL_RINGX));
+                FillRing(_ringZPts, _center, Vector3.right,   Vector3.up,      s);
+                Apply(_ringZLine, _ringZPts, w, Col(Handle.RotateZ, COL_RINGZ));
+            }
         }
 
         if (scale)

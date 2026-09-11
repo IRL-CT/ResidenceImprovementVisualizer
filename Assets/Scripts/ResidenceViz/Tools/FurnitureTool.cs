@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -20,9 +20,11 @@ public class FurnitureTool : ResidenceToolBase
     public override bool ClaimsClicks => true;
 
     public override string Hint =>
-        "Pick an item, then click to place it. Z and X rotate by 90°, Shift+scroll by 15°. Everything "
-        + "slides clear of any doorway it is tall enough to block, and what you place comes up selected "
-        + "with its handles on it.";
+        "Pick an item, then click to place it. It settles flush against a wall within reach; hold Shift "
+        + "to place it free, Ctrl to pull it to the nearest wall. R turns it a quarter turn (Shift+R the "
+        + "other way), Z and X too, Shift+scroll by 15°. Esc or a right click puts the item back. "
+        + "Everything slides clear of any doorway it is tall enough to block, and what you place comes "
+        + "up selected with its handles on it.";
 
     // null means "All". InCategory(null) already returns every entry. It used to default to the
     // literal "mobility", which was only ever correct because that is the string the shipped asset
@@ -33,7 +35,8 @@ public class FurnitureTool : ResidenceToolBase
 
     private string _selectedId;
     private float _rotation;
-    private Vector2 _cursor;
+    private Vector2 _cursor;      // where the pointer meets the floor
+    private Vector2 _placeAt;     // where the item will stand: the cursor, snapped to a wall face
     private bool _hasCursor;
 
     private WallDef _hoverWall;
@@ -68,6 +71,10 @@ public class FurnitureTool : ResidenceToolBase
         // A wall-mounted item reads the cursor from the wall face under the pointer rather than
         // from the floor projection, which lands on the far side of the wall under the angled
         // camera: the same call SensorTool makes, through the same helper.
+        // A right click with no drag puts the armed item back, the same as Esc. Read off the view
+        // controller, which owns the right-button look and knows a click from the start of one.
+        if (Ctx.View != null && Ctx.View.LookClicked && Cancel()) return;
+
         _hasCursor = Selected.IsWallMounted ? MountPlacement.WallCursor(Ctx, out _cursor)
                                             : Ctx.GroundPoint(out _cursor);
         if (!_hasCursor) return;
@@ -78,17 +85,33 @@ public class FurnitureTool : ResidenceToolBase
         {
             float scroll = Mouse.current.scroll.ReadValue().y;
             if (Mathf.Abs(scroll) > 0.01f && Ctx.ShiftHeld)
-                _rotation = Mathf.Repeat(_rotation + Mathf.Sign(scroll) * 15f, 360f);
+                _rotation = Mathf.Repeat(_rotation + Mathf.Sign(scroll) * ResidenceConventions.FACING_STEP_DEG, 360f);
         }
 
-        if (Selected.IsWallMounted) UpdateWallHover();
-
-        if (LeftClicked()) Place();
-
         // Z/X rather than the Q/E this used to be: Q/E now raise and lower the overview camera, and
-        // camera input is not gated on the pointer being off the rails, so both would have fired.
+        // camera input is not gated on the pointer being off the rails, so both would have fired. R
+        // joins them (clockwise, Shift+R back), except in the walkthrough, where R is the key that
+        // returns the viewer to a clear spot. Before the snap, so the ghost is snapped for the
+        // rotation it will be placed at.
         if (KeyDown(Key.Z)) _rotation = Mathf.Repeat(_rotation - 90f, 360f);
         if (KeyDown(Key.X)) _rotation = Mathf.Repeat(_rotation + 90f, 360f);
+        if (KeyDown(Key.R) && !InWalkthrough)
+            _rotation = Mathf.Repeat(_rotation + (Ctx.ShiftHeld ? -90f : 90f), 360f);
+
+        if (Selected.IsWallMounted) UpdateWallHover();
+        else _placeAt = Ctx.Controller.SnapToWall(_cursor, Selected.widthM, Selected.depthM, _rotation);
+
+        if (LeftClicked()) Place();
+    }
+
+    private bool InWalkthrough => Ctx.View != null && Ctx.View.Current == ViewController.Mode.Walkthrough;
+
+    /// <summary>Esc, or a right click: the armed item goes back on the shelf.</summary>
+    public override bool Cancel()
+    {
+        if (_selectedId == null) return false;
+        _selectedId = null;
+        return true;
     }
 
     // Through MountPlacement, not ResidenceMetrics directly, because the Smart living rail places grab
@@ -126,8 +149,9 @@ public class FurnitureTool : ResidenceToolBase
         Ctx.Changed();
     }
 
+    // Snap first, then fit: the fit slides along the wall, so a flush item stays flush.
     private FurnitureFit.Result FitFloor(FurnitureCatalog.Entry entry)
-        => FurnitureFit.Fit(_cursor,
+        => FurnitureFit.Fit(_placeAt,
                             FurnitureFit.Footprint(entry.widthM, entry.depthM, _rotation),
                             entry.heightM,
                             Ctx.Level);
@@ -232,7 +256,8 @@ public class FurnitureTool : ResidenceToolBase
                 "Mounted this far above the floor. Hover near a wall, and the side you hover on is the "
                 + "side it mounts to.");
         else
-            _rotation = MeasureUI.Angle("Facing", "Which way it faces when placed", _rotation);
+            _rotation = MeasureUI.Facing("Which way it faces when placed. Drag the box or type an exact bearing.",
+                                         _rotation, out _);
 
         // Delete lives here rather than on the tile: a 76 px thumbnail has no room for a ✕ that is
         // not also a misclick away from the thing it sits on, and this block is already the one
@@ -384,19 +409,10 @@ public class FurnitureTool : ResidenceToolBase
 
         Vector2 center = FitFloor(entry).position;
 
-        // True-size footprint ghost, so overlaps are visible before committing.
-        float hw = 0.5f * entry.widthM, hd = 0.5f * entry.depthM;
-        float rad = _rotation * Mathf.Deg2Rad;
-        float cos = Mathf.Cos(rad), sin = Mathf.Sin(rad);
-
-        var corners = new Vector2[4];
-        var local = new[] { new Vector2(-hw, -hd), new Vector2(hw, -hd), new Vector2(hw, hd), new Vector2(-hw, hd) };
-        // Quaternion.Euler(0, yaw, 0) maps (x, z) -> (x cos + z sin, -x sin + z cos). Rotating the
-        // ghost the other way made it a mirror image of what spawned at every 15-degree step; the two
-        // agreed only on the quarter turns, which is why it went unnoticed.
-        for (int i = 0; i < 4; i++)
-            corners[i] = center + new Vector2(local[i].x * cos + local[i].y * sin,
-                                              -local[i].x * sin + local[i].y * cos);
+        // True-size footprint ghost, so overlaps are visible before committing. The corners come from
+        // the same call the wall snap measures with, so the ghost and the snap can never disagree
+        // about where an edge is (they once did, by a sign, and agreed only on the quarter turns).
+        var corners = FurnitureSnap.Corners(center, entry.widthM, entry.depthM, _rotation);
 
         for (int i = 0; i < 4; i++)
             if (OverlayDraw.ToScreen(Ctx.Cam, corners[i], y, out Vector2 g1) &&
@@ -413,7 +429,10 @@ public class FurnitureTool : ResidenceToolBase
 
     private const float THUMB_SIZE = 76f;   // the Site Place rail's tile size
     private const float TILE_GAP = UITheme.TileGap;      // UITheme's button margin, 3 px each side
-    private const float GRID_HEIGHT = UITheme.GridHeight;
+    // Its own number rather than UITheme.GridHeight, which SensorTool's 25 tiles and UnderlayTool's
+    // page grid still want at 280. This grid holds the whole catalog with All selected, and one more
+    // row of tiles is the difference between browsing it and scrolling through it.
+    private const float GRID_HEIGHT = 364f;
 
     private bool Searching => !string.IsNullOrWhiteSpace(_search);
 
@@ -492,10 +511,13 @@ public class FurnitureTool : ResidenceToolBase
     private static readonly Dictionary<string, Texture2D> _plans = new Dictionary<string, Texture2D>();
 
     private const int TILE_PX = 64;
-    // The longest thing in the catalog is a 2.13 m hospital bed. Everything is drawn against this
+    // The longest thing in the catalog is a 2.59 m sectional. Everything is drawn against this
     // fixed reference rather than normalised per tile, because the whole point is that a bed and a
     // nightstand are NOT the same size. Normalising would draw them identically.
-    private const float TILE_SPAN_M = 2.3f;
+    //
+    // Raise this whenever something longer is added: Plan() clamps, so an item past the span draws
+    // full bleed and stops being comparable to anything, which is the one thing the tile promises.
+    private const float TILE_SPAN_M = 2.7f;
 
     private static Texture2D Plan(FurnitureCatalog.Entry e)
     {

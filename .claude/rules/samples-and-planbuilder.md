@@ -53,9 +53,11 @@ baseline; the two five-bedroom ones also ship a locked **"Smart home package"** 
   `TrySlideClear`, `BestEdgeFor`). Anything unresolved lands in **`PlanBuilder.Warnings`, which must be
   empty**. Openings must be declared before furniture. Occupants via `Person` / `Does`, resolved by
   `BuildOccupants(level)` after `Build()`.
-- **`SampleFurniture` mirrors the 35 `FurnitureCatalog` ids** (the ScriptableObject is in
-  `Assembly-CSharp`, unreachable from `CXRAuthoring`); `SampleResidenceInstaller.VerifyAgainstCatalog` and
-  `VerifyFloorFinishes` warn on drift at seed.
+- **`SampleFurniture` mirrors every `FurnitureCatalog` id** (the ScriptableObject is in
+  `Assembly-CSharp`, unreachable from `CXRAuthoring`). It is **generated** from the asset by
+  `CatalogArtBinder`'s `0 · Write SampleFurniture.cs`, never hand-edited inside its sentinels;
+  `FurnitureCatalogMirrorTests` fails on drift either way, and
+  `SampleResidenceInstaller.VerifyAgainstCatalog` and `VerifyFloorFinishes` still warn at seed.
 
 ## The starter room
 

@@ -1316,6 +1316,15 @@ public class UnderlayTool : ResidenceToolBase
 
     // ---------------------------------------------------------------------------------------
 
+    /// <summary>
+    /// Re-resolves the sketch quad against the current document and story. The quad deliberately
+    /// outlives Exit so walls can be traced over it from every stage, and EnsureQuad otherwise runs
+    /// only from this tool's Enter and Tick, which the controller calls only while this tool is
+    /// active. The controller calls this from the document lifecycle (open, new, archive, story
+    /// switch) so a residence swap made from any other stage takes the previous floorplan with it.
+    /// </summary>
+    public void SyncQuad() => EnsureQuad();
+
     private void EnsureQuad()
     {
         var underlay = ResidenceStore.UnderlayFor(Ctx?.Doc, Ctx?.Level?.id);

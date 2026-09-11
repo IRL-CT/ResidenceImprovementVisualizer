@@ -99,6 +99,10 @@ public static class UITheme
     // it is too faint to separate a button from the card behind it, which is the whole of "the buttons
     // look like text".
     public static readonly Color BtnLine    = new(0.078f, 0.086f, 0.110f, 0.22f);
+    // The wash behind the one modal (ExitPrompt). Dark enough that the card in front of it reads as
+    // the only live thing on screen, light enough that the plan underneath is still recognisable:
+    // the question being asked is about the work still visible behind it.
+    public static readonly Color Scrim      = new(0.078f, 0.086f, 0.110f, 0.46f);
 
     // ---- back-compat aliases (older call sites used these names on the dark theme) ----
     public static readonly Color Panel      = PanelCard;
@@ -750,10 +754,12 @@ public static class UITheme
     /// <param name="step">The quantum. Shift makes it ten times finer, Ctrl or Alt ten times coarser.</param>
     /// <param name="pxPerStep">Horizontal travel one unmodified step costs. 0 takes the default.</param>
     /// <param name="wrap">The ends of the range are the same place: for an angle, or a time of day.</param>
+    /// <param name="fineStep">What Shift steps by instead of a tenth of <paramref name="step"/>, when
+    /// positive. A 15° facing field wants whole degrees under Shift, which a tenth is not.</param>
     public static float DragNumber(string label, string tooltip, float value, in NumberFormat fmt,
                                    float step, float min = float.NegativeInfinity,
                                    float max = float.PositiveInfinity,
-                                   float pxPerStep = 0f, bool wrap = false)
+                                   float pxPerStep = 0f, bool wrap = false, float fineStep = 0f)
     {
         Ensure();
         EnsureNumberStyles();
@@ -816,7 +822,7 @@ public static class UITheme
                         bool coarse = e.control || e.alt;
 
                         _dragAccum = ScrubMath.Advance(_dragAccum, e.delta.x, step, pxPerStep,
-                                                       fine, coarse);
+                                                       fine, coarse, fineStep);
                         _dragBound = ScrubMath.AtBound(_dragAccum, min, max, wrap);
 
                         // Bound the ACCUMULATOR (step 0, so nothing is rounded) before reading a value
@@ -826,7 +832,7 @@ public static class UITheme
                         // discard sub-step motion, so a fine drag under a coarse step would travel
                         // nowhere however far the pointer went.
                         _dragAccum = ScrubMath.Settle(_dragAccum, 0f, min, max, wrap);
-                        result = ScrubMath.Settle(_dragAccum, ScrubMath.Step(step, fine, coarse),
+                        result = ScrubMath.Settle(_dragAccum, ScrubMath.Step(step, fine, coarse, fineStep),
                                                   min, max, wrap);
                         GUI.changed = true;
                     }
@@ -869,7 +875,7 @@ public static class UITheme
                 case KeyCode.UpArrow:
                 case KeyCode.DownArrow:
                     result = Nudge(fmt, value, e.keyCode == KeyCode.UpArrow ? 1 : -1,
-                                   step, min, max, wrap, e.shift, e.control || e.alt);
+                                   step, min, max, wrap, e.shift, e.control || e.alt, fineStep);
                     e.Use();
                     break;
             }
@@ -951,9 +957,9 @@ public static class UITheme
     }
 
     static float Nudge(in NumberFormat fmt, float value, int dir, float step,
-                       float min, float max, bool wrap, bool fine, bool coarse)
+                       float min, float max, bool wrap, bool fine, bool coarse, float fineStep = 0f)
     {
-        float eff  = ScrubMath.Step(step, fine, coarse);
+        float eff  = ScrubMath.Step(step, fine, coarse, fineStep);
         float next = ScrubMath.Settle(value + dir * eff, eff, min, max, wrap);
         // The caret stays in the field, so the text has to follow the value it no longer describes.
         _editText = fmt.Format(next);

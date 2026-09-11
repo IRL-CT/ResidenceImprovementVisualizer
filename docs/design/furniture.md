@@ -48,8 +48,97 @@ shared-by-design. Two knobs were added there, both defaulting to Site's behaviou
 (the stock 2 m floor on the handle radius is right for a tree and draws a 0.51 m toilet's gizmo four
 times the size of the toilet) and `Tick(acceptInput)`.
 
-**Shift snaps here, and means draw free in the drawing tools.** That inversion is Site's and it is
-deliberate: drawing wants snapping by default, transforming wants free by default.
+**Shift means free, here as in the drawing tools.** It did not always. The Site tool's convention is
+free by default and Shift to snap while transforming, and ResidenceViz inherited it for the rotate
+ring, so the app had two rules for one key: Shift while drawing a wall meant "stop snapping", Shift
+while turning a chair meant "start". The argument for the inversion (drawing wants snapping by
+default, transforming wants free by default) is sound for a site, where a tree can sit at any angle,
+and wrong for a room, where nearly every item stands square to a wall. So the ring and the Facing
+field now step 15° by default and Shift releases both, the same word meaning the same thing
+everywhere in ResidenceViz. The gizmo itself keeps Site's default; the controller sets the snap
+each frame.
+
+**Furniture snaps to walls (`FurnitureSnap`).** The other half of placing something by a wall is
+getting it against the wall, and until this the ghost went exactly where the cursor was: a dresser
+landed a few centimetres off the wall or a few centimetres into it, and truing it up meant zooming in
+and nudging. Now the ghost and the Move handle put a floor item's near edge on the nearest wall
+**face** when it is within `FURNITURE_SNAP_RANGE` (15 cm: it should feel like the wall catching
+something aimed at it, and leave the middle of a room free). Shift places free; Ctrl pulls from as
+far as `MOUNT_REACH`. Five decisions worth knowing:
+
+- **The face, not the centerline.** `WallLayout.EffectiveThickness` gives the half-thickness on the
+  item's side of the line. Snapping to the centerline buries half the item.
+- **The true rotated outline, not `FurnitureFit.Footprint`.** The footprint is an axis-aligned bound:
+  the safe direction for a clearance test and the wrong one here, since at 45° it would hold the item
+  most of a diagonal off the wall. `FurnitureSnap.Corners` is the one yaw mapping, and the ghost draws
+  from it too, so the outline you see is the outline that snaps.
+- **Snap, then fit.** `FurnitureFit.Fit` slides along the wall, so flushness survives it; the other
+  order would let a door slide undo the snap. `ResidenceEditController.SnapToWall` is the shared
+  entry so the ghost and the handle cannot drift apart.
+- **A flush item stays flush through a turn or a resize.** A bed against a wall that turns a quarter
+  about its center has swapped width and depth, and the gap that opens (or the overlap that closes)
+  is half their difference, far more than any snap range. So the wall is read **once, before the first
+  write** (`CaptureFlush`, guarded by a checked flag because "not flush" is a legitimate answer), and
+  `CommitFurnitureEdit` re-seats onto that wall with no range at all. Every yaw write goes through
+  `RotateFurniture` so the capture cannot be skipped by a path that forgot. Arrow nudges stay literal.
+  A corner is captured as **both** its walls, or the turn seats the bed on the one and drives it
+  through the other.
+- **A corner beats either of its walls.** The first version closed the nearer wall's gap and stopped,
+  which is why a nightstand would not tuck: one edge landed on its face while the other stayed a
+  centimetre off the wall beside it, or a centimetre inside it, and nothing but the eye could true
+  both up. The fix rests on one observation. The shift is purely along the wall's normal, and
+  translating a rectangle does not change its extents relative to its own center, so a gap is an
+  **exact linear function of the shift**: `gap(center + s) = gap(center) + sign · Dot(s, nrm)`. Flush
+  against two walls is therefore two linear equations and one 2x2 solve, exact, with no iteration and
+  no walls fighting each other. The determinant is the cross product of two unit normals, which is the
+  **sine of the corner angle**, so the conditioning of the solve and the question "is this a corner"
+  turn out to be one number, and two parallel walls (the near and far side of a narrow alcove) simply
+  have no shared answer.
+
+  Four things fell out of it or were settled around it:
+
+  - **Closing an overlap is free.** A wall the item is buried in was always a candidate, since the
+    range test is signed; it just lost the contest on `|gap|` and its overlap was left open. That
+    *was* the "flush against one wall, half inside the other" bug, and the pair solve closes both by
+    definition.
+  - **The pair is qualified on geometry, never on a shared endpoint.** Welding looks like the right
+    test and is not: `WallLinker` runs from `WallTool.CommitSegment` and `Relink` from a drag release,
+    and neither runs on a generated plan, on load, in `Migrate` or from `VariantRevert`, so a sample
+    or an imported `.riv` holds corners welded to nothing. And a partition running into the middle of
+    a wall is a corner with no shared endpoint by construction, which is exactly where a toilet goes.
+  - **The cap is stated in gaps, not in `range`.** A tuck may carry the item at most
+    `CORNER_SHIFT_FACTOR` (3) times what the nearer wall alone would have moved it. Since the solved
+    shift grows as 1/sin, that is an angle cut in disguise: it offers the tuck at any corner sharper
+    than about 40 degrees and leaves a shallow wedge on the single-wall snap, which is what it had
+    before. Writing it in `range` would have been meaningless (0.15 by default, 1.2 under Ctrl, and
+    the turn re-seat passes infinity, which this form is inert at). It also stands in for "is the
+    corner near the item": a test on the crossing itself was considered and dropped, because it is
+    wrong at an acute corner, where the item genuinely cannot get near the apex, while a distant
+    crossing already shows up here as a large shift.
+  - **Ctrl does not widen the tuck.** Ctrl offers a wall the item is nowhere near; carrying it a metre
+    sideways into a corner nobody aimed at is a different offer, so the corner pass keeps to
+    `FURNITURE_SNAP_RANGE` whatever the reach. The restricted path (the turn re-seat) is exempt,
+    because it can only pick walls the item was already flush with.
+
+  Two things known and deliberately not done. `FurnitureSnap`'s end test is strict where
+  `FurnitureFit.IsAgainst` pads by its `NEAR` (10 cm); the two are left disagreeing because they ask
+  different questions (the fit asks whether a wall still matters to an opening check, where a counter
+  run legitimately overhangs its segment; the snap asks whether to *move* an item onto a face) and the
+  risks are asymmetric, a missed snap being a nudge by hand and a wrong one a teleport onto a face
+  that is not there. And which side of a wall the item is on is still read from its center alone; the
+  pair solve checks that its answer does not carry the center across either centerline, which keeps
+  that simplification's failure down to a fallback rather than curing it.
+
+The raw drag position is accumulated separately from the snapped one (`_moveRaw`, the way the gizmo
+accumulates `_rotRaw`): snapping the stored position and adding the next delta to it would make the
+wall sticky, the item unable to leave until the cursor had travelled the whole snap range again.
+
+**Cancelling a placement.** Once a thumbnail was picked, every click placed one and nothing put it
+back. Esc now asks the active tool first (`IResidenceTool.Cancel`, one rung above deselect), and a
+right click with no drag does the same. The click is detected in `ViewController`, not the tool,
+because the right button also starts the look: locking the cursor warps it to the screen center and
+that warp arrives as one large delta only the view controller knows to discard, so a tool summing raw
+deltas would never see a sub-threshold click.
 
 Four things are ResidenceViz's rather than Site's:
 
@@ -260,3 +349,116 @@ is the `Mismatched LayoutGroup` the `_pending*` flags exist to prevent. The foot
 the item's dimensions in its key: a catalog id names one footprint forever, but a custom item can be
 deleted and remade under the same slug at a different size, and an id-only key hands that one the old
 item's picture.
+
+## The everyday-furniture pass: thirty-five items to a hundred and seven
+
+The catalog shipped 35 items, 21 of them with art. That was enough to argue about a doorway and not
+enough to draw a home. There was no dining chair, no desk, no bookcase, no washing machine, no shower
+stall, so a family looking at their own living room saw a sofa, an armchair, a coffee table and a grey
+box. Meanwhile the project already owned 578 furniture prefabs across two packs and used 23 of them.
+
+The pass added 72 ids in four new categories (`dining`, `office`, `laundry`, `storage`) and bound 58
+new donors, taking the catalog to 107 items, 79 with art. Three things were learned doing it, and all
+three are now rules.
+
+### Squash ranks fit, and fit is blind to what a thing is
+
+`MeasureFamily` had always ranked donors by squash, and the header already recorded two traps caught by
+hand: a `GasStove` offered for `range` (it is a cooktop) and an extractor hood offered for `island`. At
+sixty targets those stop being anecdotes and become the normal case. Ranked without constraint, the
+sweep proposed a wash basin as a shower stall, a bathroom vanity as a toilet, an extractor hood as a
+base cabinet, a refrigerator as a utility sink and a low table as an ottoman. Every one of those fits
+beautifully. Every one is the wrong object.
+
+So a target now names the donor **family** it may draw from, by prefab-name prefix, and squash chooses
+only within it. That is the whole fix, and it is cheap: the families are already spelled out in the
+pack's filenames.
+
+It also forced the pass to be honest about where there is simply no donor. Fourteen new ids ship as
+labeled boxes because the best fit in the right family is a lie: a walk-in tub is tall and short and
+every `BathTub` is long and low (2.46 at best); an overbed table is tall and thin and the best of all
+fifty `Table`s is 2.05; a media unit and a bed bench are long and low where every `Drawer` is chunky.
+An ottoman is the sharpest case, because the *wrong* family fits it beautifully: a low square table
+lands at 1.07 against the only plausible cushion's 1.71. It takes the box.
+
+### The half turn is free. The quarter turn is the trap
+
+The header already explained why every row carries a half turn: both packs are Blender exports facing
+minus Z, `rotationY = 0` looks down plus Z, so a donor dropped in unturned stands with its back to the
+room. What it did not say is that the half turn is *free* and the quarter turn is not.
+
+A footprint is identical under 180 degrees, so adding it cannot change which donor ranks best. A
+quarter turn **swaps** the footprint, so it wins the ranking whenever the donor is deeper than it is
+wide and the target is wider than it is deep, and it buys that better fit by standing the item
+**sideways**. For a round table, a square corner unit or a cushion that costs nothing. For anything
+with a front it is the sofa-against-the-wall bug again, one quarter turn along, and squash cannot see
+it any more than it could see the half turn.
+
+`armchair` had shipped that way and nobody had caught it: yaw 270 on a 0.85 x 0.85 target, where
+swapping the footprint could not improve the fit at all, so the quarter turn bought literally nothing
+and simply turned the chair to face the side wall. It is 180 now. Six of this pass's own rows had the
+same fault and were re-aimed, each re-picking its best donor at the unturned footprint and accepting
+the worse squash, because facing beats fit.
+
+The rule that came out of it: a seat, a bed, an appliance or a case good carries 180 unless the
+**donor** is authored rotated, which the Mega Pack's kitchen cabinets are. `base_cabinet` has shipped
+at 270 since the first pass and its door does face the room, which is why the kitchen rows keep theirs.
+
+The check that settles it is a **Top view against a known-good item**: `sofa` is correct, and in a top
+view its backrest sits at the top of the frame. Anything whose back is not at the top is turned wrong.
+That reads in one screenshot per batch, where a front view of the same batch does not, because a
+perspective camera shows off-center items their own sides.
+
+### The mirror stopped being something a person types
+
+`SampleFurniture` duplicates every id and dimension because `CXRAuthoring` has no references and cannot
+read a ScriptableObject living in `Assembly-CSharp`. At 35 rows, hand-transcribing it and letting
+`SampleResidenceInstaller.VerifyAgainstCatalog` warn at seed time was survivable. At 107 it is not, and
+the failure is silent and severe: `SampleFurniture.Get` never throws, it returns `Unknown` at
+0.6 x 0.6 x 0.8, so an id missing from the mirror renders and *measures* at a size nobody chose. That
+is a wrong answer to the only question the catalog exists to answer. Worse, the seed-time check walks
+the mirror and looks each id up in the catalog, so a catalog id absent from the mirror, which is the
+common direction of the mistake, was the one case it could not see.
+
+So the mirror joined the wrapper prefabs as a derived artifact of the same source, generated by the
+same window, between sentinels that leave the hand-written header, the `Item` struct, the `Floor` and
+`Wall` helpers, `Unknown` and `FootprintXZ` untouched. `FurnitureCatalogMirrorTests` then replaces the
+warning with a real gate, and checks the **bijection in both directions** plus every mirrored number,
+including `decorWidthFrac` and `decorHeightFrac`, which nothing had ever compared and which
+`PlanBuilder` writes straight into every `WallMountDef` it authors.
+
+The test reads the asset as **text**. `EditModeTests` cannot name `FurnitureCatalog`, because no asmdef
+can reference `Assembly-CSharp`, but it does not have to: the asset is plain YAML with a flat,
+fixed-shape entry list and `File.ReadAllText` needs no reference at all. That one observation is what
+made the gate possible with no new machinery.
+
+Two things the gate caught immediately, both pre-existing and both correct as they stand: `grab_bar_24`
+is 0.04 m thick and `threshold_ramp` 0.03 m, which is under `MIN_ITEM_SIZE`. The bars are wall mounts,
+which get no resize gizmo at all, and a threshold ramp exists to be 30 mm. Both are exempted by name in
+the test rather than rounded up, because rounding them up would put a lie in the one number this
+catalog exists to get right.
+
+### Three smaller decisions
+
+**`MountType.Counter` was avoided rather than implemented.** It exists in the enum and nothing reads
+it: `IsWallMounted` is `mount == Wall` alone, so a `Counter` entry silently behaves as a floor item and
+a microwave marked `Counter` sits on the floor. Making it real means a host relation between items, a
+new placement path, a field on `ObjectInstance`, a migration, and new cases in `VariantDiff`,
+`VariantRevert` and the sketch schema. That is a feature, not a catalog expansion. The Wall path
+already does everything a counter-top item needs, because `mountHeightM` is the item's **center**: a
+0.30 m microwave at 1.06 sits exactly on a 0.91 m counter. A counter-mounted sink and a cooktop were
+dropped instead, being duplicates of `sink_base` and `range`.
+
+**The clearance fields were filled on all 107 rows.** `ClearanceRules.Registry` is still empty by
+decision, so nothing reads them. They were filled anyway because a zero is indistinguishable from an
+unauthored row, which is precisely the state all 35 original entries had been sitting in, and because
+the numbers are a property of the object rather than of any rule that might later consume them.
+
+**The role sets stayed hand-written, and gained an eighth member nobody had listed.** `OccupancyModel`,
+`SensorPackages` and `SensorFit` keep eight sets keyed on catalog ids, and deriving them from
+`category` would be wrong in both directions: a `dining_chair` is `dining` and is sat on, a
+`wall_shelf` is `storage` and is not. Two real faults surfaced while extending them:
+`SensorFit.Surfaces` had never included `vanity`, and `SensorPackages` reached for the stove with a
+bare `"range"` literal, which would have shipped a care package with no stove sensor the moment a plan
+used any other cooking appliance. It reads `SensorFit.Cooktops` now, so what counts as a stove is
+settled in one place.

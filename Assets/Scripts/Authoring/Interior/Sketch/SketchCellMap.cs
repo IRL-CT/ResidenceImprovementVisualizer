@@ -35,11 +35,12 @@ public sealed class SketchCellMap
 
     /// <summary>
     /// Builds the map. <paramref name="hCover"/> is indexed by horizontal line (one list per entry
-    /// of <paramref name="ys"/>), <paramref name="vCover"/> by vertical line.
+    /// of <paramref name="ys"/>), <paramref name="vCover"/> by vertical line. The doorway
+    /// candidates, when given, keep the fold from swallowing a strip a door opens into.
     /// </summary>
     public static SketchCellMap Build(float[] xs, float[] ys,
                                       List<SketchCoverRun>[] hCover, List<SketchCoverRun>[] vCover,
-                                      int stroke)
+                                      int stroke, List<SketchDoorwayCandidate> doorways = null)
     {
         const float EPS = 1.5f;
 
@@ -91,31 +92,66 @@ public sealed class SketchCellMap
             rooms++;
         }
 
-        // Fold the thin strips: a "room" confined to less than a few strokes in one axis is a wall
-        // channel or a hatch strip, never floor. Then relabel so room labels stay contiguous.
-        float minSide = 3f * stroke;
-        var minI = new int[rooms]; var maxI = new int[rooms];
-        var minJ = new int[rooms]; var maxJ = new int[rooms];
-        for (int r = 0; r < rooms; r++) { minI[r] = nx; maxI[r] = -1; minJ[r] = ny; maxJ[r] = -1; }
+        // Fold the wall channels: a room EVERY cell of which is a strip or a junction is a wall's
+        // own footprint (a double line's channel, a thick wall the snap split in two, a hatch
+        // band), never floor. Judged PER CELL, because an L- or ring-shaped channel is wide in
+        // both axes by bounding box while every cell of it is still one strip; any real room owns
+        // at least one roomy cell, and one is enough to keep it. Then relabel so room labels stay
+        // contiguous.
+        //
+        // A STRIP is thin across one axis with wall cover blocking both edges of that axis; a
+        // JUNCTION (the corner cell where two channels meet, open into each of them) is thin in
+        // both axes. The width cap is max(3*stroke, 4 * the thinner flanking run's measured
+        // thickness). 3 strokes is the old fixed bar, kept so thin-walled plans fold exactly what
+        // they always folded. The measured term covers walls drawn wider than the pen: extraction
+        // already drops any crossing past 6*stroke as not-a-wall, and a hollow assembly is two
+        // panes around a channel, so a real channel spans at most about four of the LOCALLY
+        // measured pane width; the thinner flank is used so one thick wall cannot license folding
+        // a corridor running beside it.
+        //
+        // DOORWAYS decide walkability, and the test is EVENNESS. Cover runs bridge doorways
+        // virtually, so blocked edges alone cannot tell a sealed channel from a doored passage;
+        // the candidate list can. A doorway piercing ONE flank of a strip makes it a place (a
+        // walk-in you enter and stand in, however thin), and the cell keeps its room. A doorway
+        // piercing BOTH flanks at the same stretch is a door THROUGH the assembly, and the strip
+        // is still wall: the opening reader walks its probes across the folded cells. The
+        // leftover case, a gap in only one pane of a hollow wall, keeps a channel alive here, and
+        // the assembler's per-side floor drops it, phantom door and all.
+        var allStrip = new bool[rooms];
+        var hasCell = new bool[rooms];
+        for (int r = 0; r < rooms; r++) allStrip[r] = true;
         for (int j = 0; j < ny; j++)
             for (int i = 0; i < nx; i++)
             {
                 int r = map.cell[j * nx + i];
                 if (r < 0) continue;
-                if (i < minI[r]) minI[r] = i;
-                if (i > maxI[r]) maxI[r] = i;
-                if (j < minJ[r]) minJ[r] = j;
-                if (j > maxJ[r]) maxJ[r] = j;
+                hasCell[r] = true;
+                if (!allStrip[r]) continue;
+
+                bool bW = blockedV[i * ny + j], bE = blockedV[(i + 1) * ny + j];
+                bool bN = blockedH[j * nx + i], bS = blockedH[(j + 1) * nx + i];
+                int tW = bW ? FlankThickness(vCover[i], ys[j], ys[j + 1], EPS) : 0;
+                int tE = bE ? FlankThickness(vCover[i + 1], ys[j], ys[j + 1], EPS) : 0;
+                int tN = bN ? FlankThickness(hCover[j], xs[i], xs[i + 1], EPS) : 0;
+                int tS = bS ? FlankThickness(hCover[j + 1], xs[i], xs[i + 1], EPS) : 0;
+                float capX = Mathf.Max(3f * stroke, 4f * (bW && bE ? Mathf.Min(tW, tE) : Mathf.Max(tW, tE)));
+                float capY = Mathf.Max(3f * stroke, 4f * (bN && bS ? Mathf.Min(tN, tS) : Mathf.Max(tN, tS)));
+                bool thinX = xs[i + 1] - xs[i] <= capX;
+                bool thinY = ys[j + 1] - ys[j] <= capY;
+                bool evenX = (bW && Pierced(doorways, horizontal: false, i, ys[j], ys[j + 1]))
+                          == (bE && Pierced(doorways, horizontal: false, i + 1, ys[j], ys[j + 1]));
+                bool evenY = (bN && Pierced(doorways, horizontal: true, j, xs[i], xs[i + 1]))
+                          == (bS && Pierced(doorways, horizontal: true, j + 1, xs[i], xs[i + 1]));
+
+                bool strip = (thinX && bW && bE && evenX)
+                          || (thinY && bN && bS && evenY)
+                          || (thinX && thinY && evenX && evenY);
+                if (!strip) allStrip[r] = false;
             }
         var remap = new int[rooms];
         int kept = 0;
         for (int r = 0; r < rooms; r++)
-        {
-            bool thin = maxI[r] < 0
-                     || xs[maxI[r] + 1] - xs[minI[r]] < minSide
-                     || ys[maxJ[r] + 1] - ys[minJ[r]] < minSide;
-            remap[r] = thin ? FOLDED : kept++;
-        }
+            remap[r] = !hasCell[r] || allStrip[r] ? FOLDED : kept++;
         if (kept < rooms)
             for (int i = 0; i < map.cell.Length; i++)
                 if (map.cell[i] >= 0) map.cell[i] = remap[map.cell[i]];
@@ -160,6 +196,32 @@ public sealed class SketchCellMap
         return false;
     }
 
+    /// <summary>Thickness of the first run covering [a, b] (a blocked edge always has one), in
+    /// list order for determinism. Runs built without a thickness disable the measured fold term.</summary>
+    private static int FlankThickness(List<SketchCoverRun> runs, float a, float b, float eps)
+    {
+        if (runs == null) return 0;
+        for (int i = 0; i < runs.Count; i++)
+            if (runs[i].lo <= a + eps && runs[i].hi >= b - eps) return runs[i].thickness;
+        return 0;
+    }
+
+    /// <summary>A doorway candidate on this line whose gap overlaps [a, b]. The cover runs bridge
+    /// doorways virtually, so blocked edges alone cannot tell a sealed channel from a doored
+    /// corridor; the candidate list can.</summary>
+    private static bool Pierced(List<SketchDoorwayCandidate> doorways, bool horizontal, int line,
+                                float a, float b)
+    {
+        if (doorways == null) return false;
+        for (int i = 0; i < doorways.Count; i++)
+        {
+            var d = doorways[i];
+            if (d.horizontal != horizontal || d.line != line) continue;
+            if (d.g1 > a && d.g0 < b) return true;
+        }
+        return false;
+    }
+
     /// <summary>The label at a working-pixel position; OUTSIDE beyond the outermost lines.</summary>
     public int LabelAt(float px, float py)
     {
@@ -167,6 +229,33 @@ public sealed class SketchCellMap
         if (px < xs[0] || px > xs[nx] || py < ys[0] || py > ys[ny]) return OUTSIDE;
         int i = Interval(xs, px);
         int j = Interval(ys, py);
+        return cell[j * nx + i];
+    }
+
+    /// <summary>
+    /// The label past a folded wall channel: from the cell holding (px, py), steps one cell at a
+    /// time in the given direction (dirI, dirJ in -1/0/+1, one axis only) across consecutive
+    /// FOLDED cells to the first cell that is not folded; OUTSIDE past the outermost lines.
+    /// <paramref name="farLine"/> is the line index (into xs when stepping columns, ys when
+    /// stepping rows) just beyond the folded cells: the far face of the wall assembly the fold
+    /// swallowed, for re-verifying an opening across the whole assembly.
+    /// </summary>
+    public int LabelAcrossFolded(float px, float py, int dirI, int dirJ, out int farLine)
+    {
+        if (nx == 0 || ny == 0) { farLine = 0; return OUTSIDE; }
+        int i = Interval(xs, px);
+        int j = Interval(ys, py);
+        while (cell[j * nx + i] == FOLDED)
+        {
+            int ni = i + dirI, nj = j + dirJ;
+            if (ni < 0 || ni >= nx || nj < 0 || nj >= ny)
+            {
+                farLine = dirI != 0 ? (dirI > 0 ? nx : 0) : (dirJ > 0 ? ny : 0);
+                return OUTSIDE;
+            }
+            i = ni; j = nj;
+        }
+        farLine = dirI != 0 ? (dirI > 0 ? i : i + 1) : (dirJ > 0 ? j : j + 1);
         return cell[j * nx + i];
     }
 

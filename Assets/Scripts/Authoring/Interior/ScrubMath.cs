@@ -35,13 +35,15 @@ public static class ScrubMath
     public const float AccelMax = 24f;
 
     /// <summary>The effective step under the fine (Shift) and coarse (Ctrl/Alt) modifiers.</summary>
+    /// <param name="fineStep">When positive, what Shift steps by instead of a tenth of the step. A
+    /// facing field steps 15 degrees and Shift wants whole degrees, which a tenth is not.</param>
     // Fine wins when both are held: the cautious reading of an ambiguous chord is the one that cannot
     // run away with a dimension.
-    public static float Step(float step, bool fine, bool coarse)
+    public static float Step(float step, bool fine, bool coarse, float fineStep = 0f)
     {
         step = Mathf.Abs(step);
         if (step <= 0f) return 0f;
-        if (fine) return step * 0.1f;
+        if (fine) return fineStep > 0f ? fineStep : step * 0.1f;
         if (coarse) return step * 10f;
         return step;
     }
@@ -51,10 +53,10 @@ public static class ScrubMath
     /// travel one UNMODIFIED step costs; fine drags scale that up so the same pixel buys less.
     /// </summary>
     public static float Advance(float accum, float deltaPx, float step, float pxPerStep,
-                                bool fine, bool coarse)
+                                bool fine, bool coarse, float fineStep = 0f)
     {
         if (pxPerStep <= 0f) pxPerStep = DefaultPxPerStep;
-        float eff = Step(step, fine, coarse);
+        float eff = Step(step, fine, coarse, fineStep);
         if (eff <= 0f) return accum;
 
         // Speed-based acceleration. A field's whole range can be a couple of thousand pixels at one

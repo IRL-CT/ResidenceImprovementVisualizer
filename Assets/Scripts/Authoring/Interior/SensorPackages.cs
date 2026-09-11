@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -99,7 +99,7 @@ public static class SensorPackages
     // §4.4.2: the range. Plus, at Care, the switch §4.4.2 names as the way to cut its power.
     private static void AddKitchen(LevelDef level, Tier tier, IdFactory ids, List<SensorDef> made)
     {
-        var range = FirstItem(level, "range");
+        var range = FirstItem(level, SensorFit.Cooktops);
         if (range == null) return;
 
         made.Add(OnItem("stove_sensor", range, ids));
@@ -329,12 +329,17 @@ public static class SensorPackages
 
     private static readonly HashSet<string> Beds = new HashSet<string>
     {
-        "twin_bed", "full_bed", "hospital_bed",
+        "twin_bed", "full_bed", "queen_bed", "king_bed", "daybed", "hospital_bed",
     };
 
+    // A leak sensor goes where water is. The laundry and the water heater are the most useful thing
+    // the everyday categories added here: both flood a floor and neither is looked at daily.
     private static readonly HashSet<string> WetFixtures = new HashSet<string>
     {
-        "toilet", "sink_pedestal", "vanity", "bathtub", "roll_in_shower", "sink_base",
+        "toilet", "comfort_height_toilet", "sink_pedestal", "wall_basin",
+        "vanity", "double_vanity", "bathtub", "walk_in_tub",
+        "roll_in_shower", "shower_stall", "sink_base", "utility_sink",
+        "washing_machine", "dishwasher", "water_heater",
     };
 
     private static bool WatchedRoom(string roomType)
@@ -365,11 +370,14 @@ public static class SensorPackages
         return best;
     }
 
-    private static ObjectInstance FirstItem(LevelDef level, string prefabType)
+    // Takes the set rather than one id, and the set is SensorFit's, so "what counts as a stove" is
+    // settled in one place. A bare "range" literal here silently shipped a care package with no
+    // stove sensor the moment a plan used any other cooking appliance.
+    private static ObjectInstance FirstItem(LevelDef level, HashSet<string> prefabTypes)
     {
         if (level?.furniture == null) return null;
         foreach (var f in level.furniture)
-            if (f != null && f.included && f.prefabType == prefabType
+            if (f != null && f.included && prefabTypes.Contains(f.prefabType)
                 && f.position != null && f.position.Length >= 3) return f;
         return null;
     }

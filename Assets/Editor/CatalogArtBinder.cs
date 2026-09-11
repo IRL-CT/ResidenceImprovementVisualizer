@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using UnityEditor;
@@ -33,6 +33,12 @@ public class CatalogArtBinder : EditorWindow
     private const string CatalogPath  = "Assets/Resources/FurnitureCatalog.asset";
     private const string RegistryPath = "Assets/Resources/ResidenceCatalogRegistry.asset";
     private const string WrapperDir   = "Assets/Prefabs/ResidenceViz/Catalog";
+    private const string MirrorPath   = "Assets/Scripts/Authoring/Interior/SampleFurniture.cs";
+
+    // The two lines WriteMirror rewrites between. Matched by StartsWith on the trimmed line, so the
+    // indentation inside the file is free to change without breaking the generator.
+    private const string MirrorBegin = "// BEGIN GENERATED";
+    private const string MirrorEnd   = "// END GENERATED";
 
     private const string C = "Assets/Prefabs/Furniture/Cute_Furniture_Free/Prefabs/";
     private const string M = "Assets/Prefabs/Furniture 2/Prefabs/";
@@ -71,7 +77,8 @@ public class CatalogArtBinder : EditorWindow
     //
     // Deliberately left as placeholder boxes, with the reason, so nobody re-derives this:
     //
-    //   wheelchair, walker, hospital_bed, transfer_bench, patient_lift
+    //   wheelchair, walker, rollator, hospital_bed, transfer_bench, patient_lift, bedside_commode,
+    //   stair_lift
     //       No medical equipment in either pack. Stretching a chair into a patient lift would be a
     //       worse lie than a box, and these are the items the tool's whole argument rests on.
     //   shower_seat            0.41 m cube; and no sample ships one, by design (it renders inside a shower).
@@ -79,8 +86,20 @@ public class CatalogArtBinder : EditorWindow
     //   grab_bar_24/36, handrail   0.04 m rails. A stretched anything reads worse than a bar.
     //   light_switch, outlet, thermostat   sub-decimetre plates.
     //   threshold_ramp         0.03 m wedge.
+    //   walk_in_tub            Tall and short (0.76 x 1.42 x 1.35). Every BathTub is long and low:
+    //                          the whole family measures 2.46 and worse, which is the shape being
+    //                          wrong rather than the model being wrong.
+    //   wall_oven              A 1.78 m tower. The KitchenOven family is a 0.6 m box; best fit 2.04.
+    //                          A Closet donor measures well and reads as a cupboard, not an oven.
+    //   overbed_table          0.84 x 0.41 x 1.02, tall and thin. Best over all 50 Tables is 2.05.
+    //   bed_bench, media_unit  Long and low (1.22 and 1.83 across, under 0.51 high). Every Drawer is
+    //                          chunky; best 1.63 and 1.84.
+    //   ottoman                Only Cushion01 is close, at 1.71, and it is the better floor_cushion.
+    //                          A table donor fits at 1.07 and reads as a table, which is the trap.
+    //   coat_rack, wall_shelf, water_heater   Nothing of the kind in either pack.
+    //   radiator, smoke_alarm  A 0.12 m fin and a 0.13 m disc.
     //
-    // 21 bound + 14 placeholder = 35.
+    // 79 bound + 28 placeholder = 107.
     // Donors are the measured winners from Measure Family, best-fit-wins with the Cute pack preferred
     // wherever it lands within 1.30, which is where its own art actually is. The trailing figure on
     // each line is that row's squash under the exact-size fit: 1.00 is undistorted.
@@ -96,6 +115,19 @@ public class CatalogArtBinder : EditorWindow
     //
     // 180 and 270 rather than 0 and 90, therefore. A donor that ever does face +Z would be the
     // exception and would carry 0.
+    //
+    // AND 270 IS THE TRAP. The half turn above is free: a footprint is identical under it, so the
+    // best-fitting donor is still the best-fitting donor. The QUARTER turn is not free. It swaps the
+    // footprint, so it wins the ranking whenever the donor is deeper than it is wide and the target
+    // is wider than it is deep, and it buys that better fit by standing the item SIDEWAYS. For a
+    // round table or a square corner unit that costs nothing. For anything with a front it is the
+    // sofa-against-the-wall bug again, one quarter turn along.
+    //
+    // `armchair` shipped that way and nobody caught it: 270 on a 0.85 x 0.85 target, where the swap
+    // could not have improved the fit at all, so the chair simply faced the side wall. It is 180 now.
+    // So: a seat, a bed, an appliance or a case good carries 180 unless the DONOR is authored
+    // rotated, which the Mega Pack's kitchen cabinets are (base_cabinet has shipped at 270 since the
+    // first pass, and its door does face the room). Symmetric things take whichever fits better.
     private static readonly Row[] Rows =
     {
         // ---- bedroom -----------------------------------------------------------------------
@@ -110,7 +142,7 @@ public class CatalogArtBinder : EditorWindow
 
         // ---- living ------------------------------------------------------------------------
         new Row("sofa",          C + "Furniture/Couch_11.prefab",       180f),   // 1.10
-        new Row("armchair",      C + "Furniture/Armchair_18.prefab",    270f),   // 1.13
+        new Row("armchair",      C + "Furniture/Armchair_18.prefab",    180f),   // 1.13
         // Deliberately not the other Cute armchair, so the two ids read as different pieces.
         new Row("recliner",      M + "Sofas/Sofa45.prefab",             270f),   // 1.06
         new Row("coffee_table",  M + "Tables/Table46.prefab",           270f),   // 1.22
@@ -137,6 +169,117 @@ public class CatalogArtBinder : EditorWindow
         // too significant a part of a kitchen to leave as a grey box, and this is the only row that
         // exercises the wall-mount path at all.
         new Row("wall_cabinet",  M + "Kitchen/CabinetA03.prefab",       270f, PivotZ.Back),   // 1.61
+
+        // =========================================================================================
+        // The everyday-furniture pass. 58 rows.
+        // =========================================================================================
+        //
+        // Donors were ranked by measuring every prefab's local bounds ONCE per yaw and computing
+        // squash for every target arithmetically, because the fit is linear in the target size. That
+        // is ~1400 measurements for the whole catalog rather than the ~6000 a per-id MeasureFamily
+        // sweep would cost, and it is the only reason vetting sixty donors was affordable at all.
+        //
+        // SQUASH ALONE PICKS ABSURD DONORS, and this pass proved it twice over: unconstrained, it
+        // offered a wash basin as a shower stall, a vanity as a toilet, an extractor hood as a base
+        // cabinet and a low table as an ottoman. Every one of those fits beautifully and is the
+        // wrong object. So each row was drawn from its own donor FAMILY by filename prefix, and
+        // squash only chose within it. That is the same trap the GasStove and island notes above
+        // record, met at scale.
+        //
+        // Donors are unique unless sharing is the honest reading, and the three shares below are
+        // each deliberate, following twin_bed/full_bed and base_cabinet/island above.
+
+        // ---- mobility ----------------------------------------------------------------------
+        new Row("lift_recliner", M + "Sofas/Sofa49.prefab",             180f),   // 1.10
+
+        // ---- bedroom -----------------------------------------------------------------------
+        new Row("queen_bed",     M + "Beds/Bed10.prefab",               180f),   // 1.17
+        // Shared with queen_bed, as twin_bed and full_bed share Bed09: one bed frame at two widths
+        // is what a bed frame at two widths looks like. Its own best unused donor measured 1.45.
+        new Row("king_bed",      M + "Beds/Bed10.prefab",               180f),   // 1.10
+        new Row("daybed",        M + "Beds/Bed01.prefab",               180f),   // 1.05
+        new Row("chest_of_drawers", M + "Drawers/Drawer50.prefab",      180f),   // 1.08
+        new Row("double_wardrobe", M + "Closets/Closet02.prefab",       180f),   // 1.16
+        new Row("dressing_table", M + "Drawers/Drawer39.prefab",        180f),   // 1.14
+        new Row("blanket_chest", M + "Drawers/Drawer30.prefab",         180f),   // 1.14
+
+        // ---- bathroom ----------------------------------------------------------------------
+        new Row("shower_stall",  M + "Bathroom/ShowerSystem06.prefab",  270f),   // 1.45
+        new Row("comfort_height_toilet", M + "Bathroom/Toilet03.prefab", 180f),  // 1.18
+        new Row("double_vanity", M + "Bathroom/BathroomVanity06.prefab", 180f),  // 1.25
+        new Row("linen_cabinet", M + "Closets/Closet34.prefab",         180f),   // 1.44
+        // Wall mounts from here down take PivotZ.Back for the reason wall_cabinet does: MountPose
+        // puts the origin ON the wall face, so a centered pivot buries half the depth in the wall.
+        new Row("wall_basin",    M + "Bathroom/WashBasin02.prefab",     180f, PivotZ.Back),   // 1.30
+        new Row("towel_bar",     M + "Bathroom/TowelHanger03.prefab",   180f, PivotZ.Back),   // 1.08
+        new Row("paper_holder",  M + "Bathroom/TissueHanger02.prefab",  180f, PivotZ.Back),   // 1.15
+
+        // ---- kitchen -----------------------------------------------------------------------
+        new Row("microwave",     M + "Kitchen/MicrowaveOven06.prefab",  180f, PivotZ.Back),   // 1.03
+        new Row("range_hood",    M + "Kitchen/KitchenExhaust01.prefab", 180f, PivotZ.Back),   // 1.04
+        // The same cabinet as wall_cabinet, because that is exactly what it is: the wide one. Its
+        // own best unused donor measured 2.58, which is a different cabinet badly squashed.
+        new Row("wall_cabinet_wide", M + "Kitchen/CabinetA03.prefab",   270f, PivotZ.Back),   // 1.61
+        new Row("dishwasher",    M + "Kitchen/CabinetA07.prefab",       270f),   // 1.31
+        new Row("corner_cabinet", M + "Kitchen/CabinetACorner01.prefab", 270f),  // 1.18
+        new Row("pantry_cabinet", M + "Closets/Closet27.prefab",        180f),   // 1.45
+        // A run of the same cabinet base_cabinet and island already are, for the same reason island
+        // is: a counter run IS a wider run of it, and a different cabinet beside them reads as a
+        // different kitchen. Its own best unused donor measured 2.11.
+        new Row("counter_run",   M + "Kitchen/CabinetA05.prefab",       270f),   // 1.48
+        new Row("chest_freezer", M + "Kitchen/CabinetF06.prefab",       270f),   // 1.15
+
+        // ---- dining ------------------------------------------------------------------------
+        new Row("dining_table_6", M + "Tables/Table39.prefab",          180f),   // 1.43
+        new Row("dining_table_round", M + "Tables/Table42.prefab",      270f),   // 1.00
+        new Row("bistro_table",  M + "Tables/Table02.prefab",           180f),   // 1.02
+        new Row("dining_chair",  M + "Chairs/Chair17.prefab",           180f),   // 1.05
+        new Row("carver_chair",  M + "Chairs/Chair29.prefab",           180f),   // 1.04
+        new Row("bar_stool",     M + "Chairs/Chair21.prefab",           180f),   // 1.03
+        new Row("sideboard",     M + "Drawers/Drawer36.prefab",         180f),   // 1.11
+        new Row("china_cabinet", M + "Closets/Closet46.prefab",         180f),   // 1.12
+
+        // ---- living ------------------------------------------------------------------------
+        new Row("loveseat",      M + "Sofas/Sofa27.prefab",             180f),   // 1.15
+        new Row("sectional",     M + "Sofas/Sofa10.prefab",             180f),   // 1.26
+        new Row("sofa_bed",      M + "Sofas/Sofa21.prefab",             180f),   // 1.04
+        new Row("accent_chair",  M + "Chairs/Chair44.prefab",           180f),   // 1.11
+        new Row("floor_cushion", M + "Cushioins/Cushion01.prefab",      270f),   // 1.39
+        new Row("side_table",    M + "Tables/Table32.prefab",           270f),   // 1.11
+        new Row("nest_of_tables", M + "Tables/Table45.prefab",          270f),   // 1.31
+
+        // ---- office ------------------------------------------------------------------------
+        new Row("desk",          M + "Tables/Table43.prefab",           180f),   // 1.04
+        new Row("corner_desk",   M + "Tables/Table47.prefab",           270f),   // 1.01
+        new Row("office_chair",  M + "Chairs/Chair38.prefab",           180f),   // 1.03
+        new Row("filing_cabinet", M + "Drawers/Drawer49.prefab",        180f),   // 1.13
+        new Row("bookcase",      M + "Closets/Closet38.prefab",         180f),   // 1.24
+        new Row("low_bookshelf", M + "Drawers/Drawer45.prefab",         180f),   // 1.31
+        new Row("craft_table",   M + "Tables/Table09.prefab",           180f),   // 1.21
+        // The one Cute pack row in this pass, and the only exercise bike in either pack.
+        new Row("exercise_bike", C + "Decorations/ExerciseBike_01.prefab", 180f),   // 1.32
+
+        // ---- laundry -----------------------------------------------------------------------
+        // A washer and a dryer standing side by side are a matched pair in every real laundry, so
+        // this share is the point rather than a compromise. Both measured 1.19 on their own.
+        new Row("washing_machine", M + "Kitchen/CabinetB07.prefab",     180f),   // 1.19
+        new Row("dryer",         M + "Kitchen/CabinetB07.prefab",       180f),   // 1.19
+        new Row("stacked_laundry", M + "Closets/Closet12.prefab",       180f),   // 1.32
+        new Row("utility_sink",  M + "Kitchen/Sink03.prefab",           180f),   // 1.42
+        new Row("folding_counter", M + "Kitchen/CabinetC06.prefab",     270f),   // 1.41
+
+        // ---- storage -----------------------------------------------------------------------
+        new Row("shelving_unit", M + "Closets/Closet50.prefab",         180f),   // 1.20
+        new Row("storage_cabinet", M + "Closets/Closet42.prefab",       180f),   // 1.29
+        new Row("console_table", M + "Tables/Table31.prefab",           180f),   // 1.41
+        new Row("hall_tree",     M + "Closets/Closet26.prefab",         180f),   // 1.30
+        new Row("shoe_bench",    M + "Drawers/Drawer40.prefab",         180f),   // 1.42
+        new Row("trunk",         M + "Drawers/Drawer03.prefab",         180f),   // 1.23
+
+        // ---- fixtures ----------------------------------------------------------------------
+        // Not a furniture pack, so the half-turn convention below does not apply on its face: this
+        // row's yaw was settled by looking, like every other.
+        new Row("window_ac",     "Assets/Prefabs/Decor/AC.prefab",      180f, PivotZ.Back),   // 1.49
     };
 
     // ---------------------------------------------------------------------------------------
@@ -162,6 +305,7 @@ public class CatalogArtBinder : EditorWindow
             MessageType.None);
 
         EditorGUILayout.Space();
+        if (GUILayout.Button("0 · Write SampleFurniture.cs")) WriteMirror();
         if (GUILayout.Button("1 · Measure & Report  (writes nothing)")) MeasureAndReport();
         if (GUILayout.Button("2 · Generate Wrappers"))                  GenerateWrappers();
         if (GUILayout.Button("3 · Update Registry"))                    UpdateRegistry();
@@ -179,6 +323,123 @@ public class CatalogArtBinder : EditorWindow
 
         EditorGUILayout.EndScrollView();
     }
+
+    // ---------------------------------------------------------------------------------------
+    // The mirror
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Rewrites the generated table inside <c>SampleFurniture.cs</c> from the catalog asset.
+    /// </summary>
+    /// <remarks>
+    /// <para>SampleFurniture exists because CXRAuthoring has no references and so cannot read a
+    /// ScriptableObject living in Assembly-CSharp, while PlanBuilder, which is in CXRAuthoring so the
+    /// sample plans can be unit tested, needs every item's footprint. It was hand-transcribed, and at
+    /// thirty-five rows that was survivable. It is not at a hundred: a row that misses the mirror does
+    /// not fail, it resolves to <see cref="SampleFurniture.Unknown"/> at 0.6 x 0.6 x 0.8, which is a
+    /// silently wrong answer to the one question this tool exists to answer.</para>
+    ///
+    /// <para>So the mirror joins the wrapper prefabs as a DERIVED artifact of the same source, edited
+    /// through the same window. Only the region between the sentinels is touched; the header, the
+    /// Item struct, the Floor/Wall helpers, Unknown and FootprintXZ are hand-written and stay.</para>
+    ///
+    /// <para>This writes a .cs file, so the refresh at the end triggers a domain reload that tears
+    /// this window down. Nothing may run after it, which is why this is its own button rather than a
+    /// step inside <see cref="GenerateWrappers"/>.</para>
+    /// </remarks>
+    private void WriteMirror()
+    {
+        var cat = LoadCatalog();
+        if (cat == null) return;
+
+        string path = System.IO.Path.Combine(
+            System.IO.Directory.GetParent(Application.dataPath).FullName, MirrorPath);
+        if (!System.IO.File.Exists(path))
+        {
+            Debug.LogError($"[CatalogArtBinder] No mirror at {MirrorPath}."); return;
+        }
+
+        var rows = new List<FurnitureCatalog.Entry>();
+        foreach (var e in cat.entries)
+            if (e != null && !string.IsNullOrEmpty(e.id)) rows.Add(e);
+
+        if (rows.Count == 0) { Debug.LogError("[CatalogArtBinder] The catalog is empty."); return; }
+
+        // Pad to the longest id so the numbers line up in a column, exactly as the hand-written table
+        // did. `Wall` carries a trailing space so its arguments sit under `Floor`'s.
+        int width = 0;
+        foreach (var e in rows) width = Mathf.Max(width, e.id.Length);
+        width += 4;                                     // the two quotes, the comma, one space
+
+        var body = new StringBuilder();
+        string category = null;
+        foreach (var e in rows)
+        {
+            if (e.category != category)
+            {
+                if (category != null) body.AppendLine();
+                category = e.category;
+                body.AppendLine($"            // {category}");
+            }
+
+            string key = ("\"" + e.id + "\",").PadRight(width);
+            body.Append(e.IsWallMounted ? "            Wall (" : "            Floor(").Append(key)
+                .Append(N(e.widthM)).Append(", ").Append(N(e.depthM)).Append(", ").Append(N(e.heightM));
+            if (e.IsWallMounted) body.Append(", ").Append(N(e.mountHeightM));
+            body.AppendLine("),");
+        }
+
+        // Whatever the file already uses, so a regenerate is not a whole-file diff on Windows.
+        string eol = System.IO.File.ReadAllText(path).Contains("\r\n") ? "\r\n" : "\n";
+
+        // Rebuilt line by line rather than by regex: the sentinels are whole lines, the region between
+        // them is replaced wholesale, and a file missing either sentinel is left untouched.
+        var kept = new List<string>();
+        bool inside = false, sawBegin = false, sawEnd = false;
+        foreach (string line in System.IO.File.ReadAllLines(path))
+        {
+            string t = line.Trim();
+            if (!inside && t.StartsWith(MirrorBegin))
+            {
+                inside = true; sawBegin = true;
+                kept.Add(line);
+                foreach (string b in body.ToString().TrimEnd('\r', '\n').Split('\n'))
+                    kept.Add(b.TrimEnd('\r'));
+                continue;
+            }
+            if (inside)
+            {
+                if (!t.StartsWith(MirrorEnd)) continue;
+                inside = false; sawEnd = true;
+            }
+            kept.Add(line);
+        }
+
+        if (!sawBegin || !sawEnd)
+        {
+            Debug.LogError($"[CatalogArtBinder] {MirrorPath} is missing its " +
+                           $"{(sawBegin ? MirrorEnd : MirrorBegin)} sentinel. Nothing written.");
+            return;
+        }
+
+        System.IO.File.WriteAllText(path, string.Join(eol, kept) + eol);
+        Debug.Log($"[CatalogArtBinder] Write SampleFurniture.cs\n  {rows.Count} items, " +
+                  $"{CountCategories(rows)} categories. Check `git diff` before trusting it.");
+
+        // Last. The recompile this kicks off tears this window down.
+        AssetDatabase.Refresh();
+    }
+
+    private static int CountCategories(List<FurnitureCatalog.Entry> rows)
+    {
+        var seen = new HashSet<string>();
+        foreach (var e in rows) seen.Add(e.category);
+        return seen.Count;
+    }
+
+    /// <summary>A float as the table spells it: two places and an `f`, so 0.6 reads as 0.60f.</summary>
+    private static string N(float v)
+        => v.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture) + "f";
 
     // ---------------------------------------------------------------------------------------
     // Measurement

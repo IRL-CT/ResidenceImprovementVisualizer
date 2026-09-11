@@ -20,7 +20,7 @@ public class SelectTool : ResidenceToolBase
         "Click a wall, room, item or resident to inspect it. A wall lists the doors and "
         + "windows in it. Furniture gets handles: "
         + "drag to move, the ring to turn, the cube to resize. Arrow keys nudge (Shift finer), "
-        + "Z/X quarter-turn, F frames, Delete removes.";
+        + "R, Z and X quarter-turn, F frames, Delete removes.";
 
     public override void HandleInput()
     {
@@ -71,10 +71,11 @@ public class SelectTool : ResidenceToolBase
     // Keyboard transforms
     // ---------------------------------------------------------------------------------------
 
-    // Arrows nudge, Z/X quarter-turn. Z and X rather than the more obvious Q/E for the same reason
-    // the Furniture tool uses them for its ghost: Q/E raise and lower the overview camera, and camera
-    // input is not gated on the pointer being off the rails, so both would fire at once. Using the
-    // same pair before and after placing means one gesture, not two.
+    // Arrows nudge, R and Z/X quarter-turn. Z and X rather than the more obvious Q/E for the same
+    // reason the Furniture tool uses them for its ghost: Q/E raise and lower the overview camera, and
+    // camera input is not gated on the pointer being off the rails, so both would fire at once. R is
+    // the same pair on one key (Shift+R goes back) and is the walkthrough's return-to-a-clear-spot
+    // key, so it is silent there. Using the same keys before and after placing means one gesture.
     private const float NUDGE = 0.05f;
     private const float NUDGE_FINE = 0.01f;
 
@@ -94,18 +95,22 @@ public class SelectTool : ResidenceToolBase
         if (KeyDown(Key.LeftArrow)) d.x -= step;
         if (KeyDown(Key.RightArrow)) d.x += step;
 
-        bool turnLeft = KeyDown(Key.Z);
-        bool turnRight = KeyDown(Key.X);
+        bool walking = Ctx.View != null && Ctx.View.Current == ViewController.Mode.Walkthrough;
+        float turn = 0f;
+        if (KeyDown(Key.Z)) turn -= 90f;
+        if (KeyDown(Key.X)) turn += 90f;
+        if (KeyDown(Key.R) && !walking) turn += Ctx.ShiftHeld ? -90f : 90f;
 
-        if (d == Vector2.zero && !turnLeft && !turnRight) return;
+        if (d != Vector2.zero)
+        {
+            Ctx.RecordEdit("Nudge furniture");
+            item.position[0] += d.x;
+            item.position[2] += d.y;
+            Ctx.Controller.CommitFurnitureEdit(item);
+        }
 
-        Ctx.RecordEdit(d != Vector2.zero ? "Nudge furniture" : "Rotate furniture");
-        item.position[0] += d.x;
-        item.position[2] += d.y;
-        if (turnLeft) item.rotationY = Mathf.Repeat(item.rotationY - 90f, 360f);
-        if (turnRight) item.rotationY = Mathf.Repeat(item.rotationY + 90f, 360f);
-
-        Ctx.Controller.CommitFurnitureEdit(item);
+        // Through the controller, which keeps an item that was against a wall against it.
+        if (turn != 0f) Ctx.Controller.RotateFurniture(item, item.rotationY + turn, discrete: true);
     }
 
     // ---------------------------------------------------------------------------------------
@@ -572,8 +577,11 @@ public class SelectTool : ResidenceToolBase
 
     private static readonly string[] TransformTips =
     {
-        "Drag the arrows or the center pad in the plan. Arrow keys nudge; hold Shift for finer steps.",
-        "Drag the ring in the plan, or use Z and X for quarter turns. Hold Shift to snap to 15°.",
+        "Drag the arrows or the center pad in the plan. It settles flush against a wall within reach; "
+            + "hold Shift to move it free, Ctrl to pull it to the nearest wall. Arrow keys nudge, Shift "
+            + "for finer steps.",
+        "Drag the ring in the plan. It turns in 15° steps; hold Shift to turn freely. R, Z and X turn "
+            + "a quarter at a time.",
         "Drag the cube to resize proportionally, or a slider for one dimension. These are the item's "
             + "real dimensions: what gets drawn, and what clearances are measured against.",
     };
@@ -619,32 +627,18 @@ public class SelectTool : ResidenceToolBase
         return summary;
     }
 
+    // The field and the four quarters are one control (MeasureUI.Facing), shared with the Furniture
+    // tool's ghost so a bearing means the same thing before and after placing. A drag is a gesture:
+    // the re-fit and the rebuild wait for the mouse-up, so it is one undo entry and does not fight the
+    // thumb by sliding the item aside mid-gesture. A quarter click is a discrete edit.
     private void DrawRotateControls(ObjectInstance f)
     {
-        float rot = MeasureUI.Angle("Facing",
-                                    "Which way this faces. Drag the box, or type an exact bearing.",
-                                    f.rotationY);
-        if (!Mathf.Approximately(rot, f.rotationY))
-        {
-            Ctx.BeginGesture("Rotate furniture");
-            f.rotationY = rot;
-            Ctx.Renderer?.PoseFurnitureGO(f);
-            // The re-fit and the rebuild wait for the mouse-up, so a slider drag is one undo entry
-            // and does not fight the thumb by sliding the item aside mid-gesture.
-            Ctx.Controller.NoteFurnitureEdit();
-        }
+        float rot = MeasureUI.Facing("Which way this faces. Drag the box or type an exact bearing.",
+                                     f.rotationY, out bool discrete);
+        if (Mathf.Approximately(rot, f.rotationY)) return;
 
-        GUILayout.BeginHorizontal();
-        bool left = UITheme.SecondaryButton("↺ 90°");
-        UITheme.Tip("Turn a quarter turn anticlockwise  (Z)");
-        bool right = UITheme.SecondaryButton("↻ 90°");
-        UITheme.Tip("Turn a quarter turn clockwise  (X)");
-        GUILayout.EndHorizontal();
-        if (!left && !right) return;
-
-        Ctx.RecordEdit("Rotate furniture");
-        f.rotationY = Mathf.Repeat(f.rotationY + (left ? -90f : 90f), 360f);
-        Ctx.Controller.CommitFurnitureEdit(f);
+        if (!discrete) Ctx.BeginGesture("Rotate furniture");
+        Ctx.Controller.RotateFurniture(f, rot, discrete);
     }
 
     // Resizing writes the item's TRUE dimensions, not a multiplier. boxSizeMeters is what
@@ -673,6 +667,8 @@ public class SelectTool : ResidenceToolBase
             // widened by a fifth also gets a fifth longer instead of turning into a different bed.
             if (_lockAspect) next = size * AspectFactor(size, next);
 
+            // Before the first write, so a bed against a wall grows into the room, not into the wall.
+            Ctx.Controller.CaptureFlush(f);
             Ctx.BeginGesture("Resize furniture");
             Ctx.Controller.SetFurnitureSize(f, next);
             Ctx.Renderer?.PoseFurnitureGO(f);

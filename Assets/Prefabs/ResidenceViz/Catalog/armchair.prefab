@@ -47,8 +47,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::CatalogArtFit
   art: {fileID: 6798932113489660727}
   nominalSize: {x: 0.85, y: 0.84, z: 0.85}
-  baseScale: {x: 0.9064114, y: 0.79904836, z: 0.8411866}
-  basePosition: {x: -0.033545706, y: -0.00000009525399, z: 0.000000050138627}
+  baseScale: {x: 0.84118664, y: 0.79904836, z: 0.9064115}
+  basePosition: {x: -0.00000005013863, y: -0.00000009525399, z: -0.033545736}
   handTuned: 0
 --- !u!1 &3388831630826950235
 GameObject:
@@ -75,8 +75,8 @@ Transform:
   m_GameObject: {fileID: 3388831630826950235}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -0.033545706, y: -0.00000009525399, z: 0.000000050138627}
-  m_LocalScale: {x: 0.9064114, y: 0.79904836, z: 0.8411866}
+  m_LocalPosition: {x: -0.00000005013863, y: -0.00000009525399, z: -0.033545736}
+  m_LocalScale: {x: 0.84118664, y: 0.79904836, z: 0.9064115}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 3671419915634030091}
@@ -108,7 +108,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 1804061950862801817, guid: 1a7ca4ae1867e824d852f488df629700, type: 3}
       propertyPath: m_LocalRotation.w
-      value: -0.7071068
+      value: -0.00000004371139
       objectReference: {fileID: 0}
     - target: {fileID: 1804061950862801817, guid: 1a7ca4ae1867e824d852f488df629700, type: 3}
       propertyPath: m_LocalRotation.x
@@ -116,7 +116,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 1804061950862801817, guid: 1a7ca4ae1867e824d852f488df629700, type: 3}
       propertyPath: m_LocalRotation.y
-      value: 0.7071068
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 1804061950862801817, guid: 1a7ca4ae1867e824d852f488df629700, type: 3}
       propertyPath: m_LocalRotation.z

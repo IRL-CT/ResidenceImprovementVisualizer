@@ -5,6 +5,7 @@ paths:
   - "Assets/Scripts/ResidenceViz/ModeBand.cs"
   - "Assets/Scripts/ResidenceViz/TimelineBar.cs"
   - "Assets/Scripts/ResidenceViz/MeasureUI.cs"
+  - "Assets/Scripts/ResidenceViz/ExitPrompt.cs"
   - "Assets/Scripts/ResidenceViz/ResidenceEditController.cs"
   - "Assets/Scripts/ResidenceViz/Tools/**"
   - "Assets/Scripts/Authoring/Interior/ScrubMath.cs"
@@ -53,6 +54,16 @@ paths:
   where the label must stay short (Read this plan), in a `⚠` glyph tooltip beside it, and a
   two-click confirm's DangerButton always names the price in its label; scene-wiring
   faults are `Debug.LogWarning`.
+- **One modal, and it is the way out.** `ExitPrompt` is the only one: a `Scrim` wash plus one
+  centered `BeginPanel` card, drawn after every rail and before `DrawStatus` (so a failed save is
+  readable over it) and before `UITooltip.Draw`. Raised only by Esc's fourth rung, by
+  `Application.wantsToQuit`, and by the three acts that swap `ResidenceDoc` over unsaved work.
+  **`GUI.enabled = false` around everything else is what makes it modal**: IMGUI hands an event to
+  the first control that claims it and the rails draw first, so a card merely painted on top would
+  answer to nothing. `PointerOverUI` is true for the whole window, `ViewController.Update` stands
+  down (the walkthrough has no pointer test of its own), every answer defers through
+  `_pendingExitAnswer`, and `Dirty` is **latched** at open so the card's control count cannot change
+  mid-frame. Every other confirmation stays inline and two-click.
 - **Figures are the footnote**: a rail opens on the name, then controls, and closes on one muted
   `UITheme.MutedLine` of figures above Delete: *returned* by each `Draw*` and emitted by `DrawRail`
   after the switch, because four of them return early when the variant is locked. Readout chips over
@@ -62,7 +73,8 @@ paths:
 (`RowH + 4`), the name painted inside on the left (`FieldInset`), the affordance in the right
 `GlyphGutter` (`↔` / eye / `●○`), `BtnLine` rim, `Accent` edge and `Tint` wash when hot.
 - **`DragNumber` is the one number control.** A field you type into that scrubs when dragged. Shift
-  finer, Ctrl/Alt coarser; up/down nudge; Enter/click-away commit; Esc cancels; live value pinned at
+  finer (a tenth, or the optional `fineStep`: `MeasureUI.Facing` steps 15° and Shift gives 1°),
+  Ctrl/Alt coarser; up/down nudge; Enter/click-away commit; Esc cancels; live value pinned at
   the cursor via `UITooltip.Pin`. **The timeline's clock is a `MeasureUI.Time` field** (the day
   scrubber); a click on the hour ruler jumps to that time; the ▲/▼ chip is the only expand control.
 - **`UITheme.Toggle(label, value, tip)` is the one on/off control** in a rail: never

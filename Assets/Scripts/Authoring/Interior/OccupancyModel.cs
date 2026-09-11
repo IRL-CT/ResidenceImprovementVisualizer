@@ -54,13 +54,22 @@ public static class OccupancyModel
     // and SampleFurniture, so this works for a residence the user drew, not just the shipped six.
     private static readonly HashSet<string> OccupiedItems = new HashSet<string>
     {
-        "twin_bed", "full_bed", "hospital_bed", "sofa", "armchair", "recliner",
-        "toilet", "bathtub", "roll_in_shower", "transfer_bench", "shower_seat", "wheelchair",
+        "twin_bed", "full_bed", "queen_bed", "king_bed", "daybed", "hospital_bed",
+        "sofa", "loveseat", "sectional", "sofa_bed", "armchair", "accent_chair", "recliner",
+        "lift_recliner", "ottoman", "floor_cushion",
+        "dining_chair", "carver_chair", "bar_stool", "office_chair",
+        "toilet", "comfort_height_toilet", "bathtub", "walk_in_tub", "roll_in_shower",
+        "shower_stall", "transfer_bench", "shower_seat", "bedside_commode",
+        "wheelchair", "exercise_bike",
     };
 
+    // Tables and counters you stand or sit AT. A side table, a console and a nest are deliberately
+    // out: nobody works at one, and InFrontOf is the right answer for something you reach past.
     private static readonly HashSet<string> EdgeItems = new HashSet<string>
     {
-        "dining_table", "coffee_table", "island",
+        "dining_table", "dining_table_6", "dining_table_round", "bistro_table",
+        "coffee_table", "island", "counter_run", "folding_counter",
+        "desk", "corner_desk", "craft_table", "dressing_table", "overbed_table",
     };
 
     /// <summary>Unknown ids fall back to InFrontOf, which is the behaviour this always had.</summary>

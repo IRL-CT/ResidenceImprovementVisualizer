@@ -92,6 +92,15 @@ public class ViewController : MonoBehaviour
     // press that lands on a rail also drives the camera.
     private bool _lookDrag, _panDrag;
     private Vector2 _cursorBeforeCapture;
+
+    /// <summary>
+    /// True for the one frame on which a right button press ended without becoming a look: a right
+    /// CLICK. A tool that wants "right-click cancels" reads this rather than the mouse, because the
+    /// look drag locks the cursor and the lock's warp arrives as one large delta that only this
+    /// class knows to discard (see <see cref="_swallowDelta"/>).
+    /// </summary>
+    public bool LookClicked { get; private set; }
+    private float _lookTravel;
     // Locking warps the OS cursor to the center of the screen, and that warp arrives as one large
     // delta. Applying it snaps the view a quarter turn on the first frame of every look.
     private bool _swallowDelta;
@@ -116,6 +125,7 @@ public class ViewController : MonoBehaviour
     // every exit releases it: leaving the component, losing the window, and switching view mode.
     private void OnDisable() => EndDrags();
 
+
     private void OnApplicationFocus(bool focused)
     {
         if (!focused) EndDrags();
@@ -124,6 +134,16 @@ public class ViewController : MonoBehaviour
     private void Update()
     {
         if (cam == null) return;
+
+        // A modal owns the window, and PointerOverUI is not enough to say so here: the walkthrough
+        // looks around on any held mouse button and walks on WASD with no pointer test at all, by
+        // design, because the rails stay up while you walk. Behind the exit prompt that would turn
+        // the camera under the card.
+        //
+        // EndDrags rather than a bare return: Esc can arrive mid right-drag with the cursor locked
+        // and hidden, and an invisible cursor cannot press a button. It is idempotent, and it
+        // releases through ReleaseCursor, so that stays the one place the lock is dropped.
+        if (editController != null && editController.ExitPromptOpen) { EndDrags(); return; }
 
         switch (Current)
         {
@@ -264,6 +284,7 @@ public class ViewController : MonoBehaviour
         var mouse = Mouse.current;
         if (mouse == null) return;
 
+        bool wasLook = _lookDrag;
         _lookDrag = StillDragging(mouse.rightButton.isPressed, _lookDrag);
         _panDrag = StillDragging(mouse.middleButton.isPressed, _panDrag);
         _lookDrag = BeginDrag(mouse.rightButton, _lookDrag);
@@ -271,6 +292,12 @@ public class ViewController : MonoBehaviour
         SyncCapture();
 
         Vector2 delta = DragDelta(mouse);
+
+        // A press that ends under the drag threshold was a click. Measured after the swallow, so the
+        // lock's warp does not count as travel.
+        if (_lookDrag && !wasLook) _lookTravel = 0f;
+        if (_lookDrag) _lookTravel += delta.magnitude;
+        LookClicked = wasLook && !_lookDrag && _lookTravel * _lookTravel < ScrubMath.DragThresholdSq;
 
         if (_lookDrag) FreeLook(delta);
 
@@ -481,6 +508,16 @@ public class ViewController : MonoBehaviour
 
         // Look only while a button is held. Free mouselook would fight the IMGUI rails, which stay
         // on screen in the walkthrough so the change list is still readable.
+        LookClicked = false;
+        if (mouse != null)
+        {
+            // Nothing is locked here, so the raw delta is the travel. Same click test as the orbit.
+            if (mouse.rightButton.wasPressedThisFrame) _lookTravel = 0f;
+            if (mouse.rightButton.isPressed) _lookTravel += mouse.delta.ReadValue().magnitude;
+            LookClicked = mouse.rightButton.wasReleasedThisFrame
+                          && _lookTravel * _lookTravel < ScrubMath.DragThresholdSq;
+        }
+
         if (mouse != null && (mouse.rightButton.isPressed || mouse.leftButton.isPressed))
         {
             Vector2 delta = mouse.delta.ReadValue();

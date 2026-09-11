@@ -124,6 +124,85 @@ public class SketchWallStageTests
         Assert.AreEqual(0, rects[1].i1, "the leg keeps to the west column");
     }
 
-    private static List<SketchCoverRun> Runs(float lo, float hi)
-        => new List<SketchCoverRun> { new SketchCoverRun { lo = lo, hi = hi, realPx = (int)(hi - lo) } };
+    [Test]
+    public void CellMap_FoldsAHollowWallChannel_BetweenThinPanes()
+    {
+        // A 300 x 200 box split by a hollow divider: two panes 8 px apart, wider than the grouping
+        // caps ever merge, so extraction minted two wall lines. The channel between them is wall,
+        // not a room.
+        var xs = new[] { 0f, 100f, 108f, 300f };
+        var ys = new[] { 0f, 200f };
+        var hCover = new[] { Runs(0f, 300f, 2), Runs(0f, 300f, 2) };
+        var vCover = new[] { Runs(0f, 200f, 2), Runs(0f, 200f, 2), Runs(0f, 200f, 2), Runs(0f, 200f, 2) };
+
+        var cells = SketchCellMap.Build(xs, ys, hCover, vCover, stroke: 2);
+
+        Assert.AreEqual(2, cells.roomCount, "the channel folds; the two real rooms stand");
+        Assert.AreEqual(SketchCellMap.FOLDED, cells.LabelAt(104f, 100f), "the channel is wall");
+        Assert.AreEqual(0, cells.LabelAt(50f, 100f));
+        Assert.AreEqual(1, cells.LabelAt(200f, 100f));
+    }
+
+    [Test]
+    public void CellMap_FoldsAnLShapedChannel_WhoseBoundingBoxIsWideBothWays()
+    {
+        // A room walled hollow on its east and south sides: the channel turns the corner, so its
+        // bounding box is wide in both axes. The old bounding-box fold kept it; per-cell judging
+        // folds it, the corner junction cell included.
+        var xs = new[] { 0f, 150f, 158f, 300f };
+        var ys = new[] { 0f, 150f, 158f, 300f };
+        var hCover = new[] { Runs(0f, 158f, 2), Runs(0f, 150f, 2), Runs(0f, 158f, 2), None() };
+        var vCover = new[] { Runs(0f, 158f, 2), Runs(0f, 150f, 2), Runs(0f, 158f, 2), None() };
+
+        var cells = SketchCellMap.Build(xs, ys, hCover, vCover, stroke: 2);
+
+        Assert.AreEqual(1, cells.roomCount, "one room; the L channel is wall");
+        Assert.AreEqual(0, cells.LabelAt(75f, 75f));
+        Assert.AreEqual(SketchCellMap.FOLDED, cells.LabelAt(154f, 75f), "the east arm");
+        Assert.AreEqual(SketchCellMap.FOLDED, cells.LabelAt(75f, 154f), "the south arm");
+        Assert.AreEqual(SketchCellMap.FOLDED, cells.LabelAt(154f, 154f), "the corner junction");
+    }
+
+    [Test]
+    public void CellMap_KeepsADooredStrip_BecauseAWalkableStripIsARoom()
+    {
+        // The hollow-divider geometry, but a doorway pierces ONE flank: the strip is a walk-in you
+        // can enter and stand in, so it keeps its room label however thin it is.
+        var xs = new[] { 0f, 100f, 108f, 300f };
+        var ys = new[] { 0f, 200f };
+        var hCover = new[] { Runs(0f, 300f, 2), Runs(0f, 300f, 2) };
+        var vCover = new[] { Runs(0f, 200f, 2), Runs(0f, 200f, 2), Runs(0f, 200f, 2), Runs(0f, 200f, 2) };
+        var doorways = new List<SketchDoorwayCandidate>
+        {
+            new SketchDoorwayCandidate { horizontal = false, line = 1, g0 = 80f, g1 = 120f,
+                                         jambA = 60, jambB = 60, thickness = 2 },
+        };
+
+        var cells = SketchCellMap.Build(xs, ys, hCover, vCover, stroke: 2, doorways);
+
+        Assert.AreEqual(3, cells.roomCount, "the doored strip stands");
+        Assert.AreEqual(1, cells.LabelAt(104f, 100f));
+    }
+
+    [Test]
+    public void CellMap_KeepsAWideStrip_BetweenThickFlanks()
+    {
+        // A 40 px passage between thick walls: past four times the thinner flank's thickness, the
+        // strip is a corridor, not a channel.
+        var xs = new[] { 0f, 100f, 140f, 300f };
+        var ys = new[] { 0f, 200f };
+        var hCover = new[] { Runs(0f, 300f, 6), Runs(0f, 300f, 6) };
+        var vCover = new[] { Runs(0f, 200f, 6), Runs(0f, 200f, 6), Runs(0f, 200f, 6), Runs(0f, 200f, 6) };
+
+        var cells = SketchCellMap.Build(xs, ys, hCover, vCover, stroke: 2);
+
+        Assert.AreEqual(3, cells.roomCount, "a corridor is floor");
+        Assert.AreEqual(1, cells.LabelAt(120f, 100f));
+    }
+
+    private static List<SketchCoverRun> Runs(float lo, float hi, int thickness = 0)
+        => new List<SketchCoverRun> { new SketchCoverRun { lo = lo, hi = hi, realPx = (int)(hi - lo),
+                                                           thickness = thickness } };
+
+    private static List<SketchCoverRun> None() => new List<SketchCoverRun>();
 }
