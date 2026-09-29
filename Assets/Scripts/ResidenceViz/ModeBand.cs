@@ -12,8 +12,9 @@ using UnityEngine;
 //
 // AMBER IS FOR EDITING THE BASE, and that is the point of the whole file. Working in a proposal is
 // the routine case and gets the accent; opening the base environment is the rare and consequential
-// one, because an accidental edit there silently corrupts what every proposal is measured against,
-// and nothing downstream would ever complain. It is not an error, so Danger would be a lie.
+// one, because an edit there changes what every proposal is measured against and is carried into
+// every proposal as a fact (VariantSync), so an accidental one lands everywhere at once. It is not
+// an error, so Danger would be a lie.
 //
 // LOCKING IS NOT A FEATURE HERE. It is one mode switch with one residence. VariantDef.locked survives in
 // the schema (ResidenceToolContext.IsLocked, TickGizmo and SampleRefresh all read it) but only the
@@ -50,7 +51,7 @@ public class ModeBand
     {
         /// <summary>The base environment, read-only. Where a residence spends most of its life.</summary>
         Base,
-        /// <summary>The base environment, open for edits. Edits here change what proposals are measured against.</summary>
+        /// <summary>The base environment, open for edits. Every change here carries into every proposal.</summary>
         EditingBase,
         /// <summary>A proposal. Always editable. See the header.</summary>
         Proposal,
@@ -219,7 +220,8 @@ public class ModeBand
             case Mode.Base:
                 if (UITheme.BandButton("Modify base environment", GUILayout.Height(BtnH)))
                     EditBaseRequested = true;
-                UITheme.Tip("Edit the residence as it stands. Every proposal is measured against this.");
+                UITheme.Tip("Edit the residence as it stands. Every proposal is measured against this "
+                            + "and receives each change you make here.");
                 if (UITheme.BandButton("New proposal", GUILayout.Height(BtnH)))
                     NewProposalRequested = true;
                 UITheme.Tip("Copy the base environment into a new proposal.");

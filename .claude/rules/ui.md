@@ -60,7 +60,9 @@ paths:
   `Application.wantsToQuit`, and by the three acts that swap `ResidenceDoc` over unsaved work.
   **`GUI.enabled = false` around everything else is what makes it modal**: IMGUI hands an event to
   the first control that claims it and the rails draw first, so a card merely painted on top would
-  answer to nothing. `PointerOverUI` is true for the whole window, `ViewController.Update` stands
+  answer to nothing. The same rule puts the styleless whole-window `GUI.Button` that swallows
+  clicks beside the card **after** `EndPanel`: drawn before the card it ate the three answers.
+  `PointerOverUI` is true for the whole window, `ViewController.Update` stands
   down (the walkthrough has no pointer test of its own), every answer defers through
   `_pendingExitAnswer`, and `Dirty` is **latched** at open so the card's control count cannot change
   mid-frame. Every other confirmation stays inline and two-click.

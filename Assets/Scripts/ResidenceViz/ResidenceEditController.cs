@@ -1168,6 +1168,8 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
 
         ResidenceStore.Settings.lastOpenedResidenceId = Doc.id;
         ResidenceStore.SaveSettings();
+
+        ResetShadow();   // a different document: the old baseline's picture describes nothing here
     }
 
     /// <summary>
@@ -1200,7 +1202,57 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
         return false;
     }
 
-    public void MarkDirty() => Dirty = true;
+    /// <summary>
+    /// Every mutation ends here, which is what makes it the one place a base environment edit can be
+    /// carried into the proposals. Synchronous on purpose: SetActiveVariant is called straight from
+    /// OnGUI and renders at once, RecordBefore snapshots the whole document before the NEXT edit, and
+    /// SaveResidence writes whatever is there. A flag drained next frame would let all three see
+    /// proposals the base had already moved past.
+    /// </summary>
+    public void MarkDirty()
+    {
+        Dirty = true;
+        SyncProposals();
+    }
+
+    // The baseline as it stood after the last edit anyone saw. VariantSync diffs the live baseline
+    // against it and carries the difference into every proposal. Null while the residence has no
+    // proposal to carry anything into.
+    private VariantDef _baselineShadow;
+
+    private void SyncProposals()
+    {
+        if (Doc == null) { _baselineShadow = null; return; }
+
+        var baseline = ResidenceStore.Baseline(Doc);
+        if (baseline == null || !HasProposal(Doc)) { _baselineShadow = null; return; }
+
+        // Nothing to measure against yet: take the picture and wait for the next edit.
+        if (_baselineShadow == null || _baselineShadow.id != baseline.id)
+        {
+            _baselineShadow = VariantSync.Snapshot(baseline);
+            return;
+        }
+
+        // Re-snapshot whenever the baseline moved, whether or not a proposal took the change (a
+        // proposal that kept its own version of an element must not see that base edit again).
+        if (VariantSync.PropagateAll(_baselineShadow, baseline, Doc.variants) > 0)
+            _baselineShadow = VariantSync.Snapshot(baseline);
+    }
+
+    /// <summary>Forget the shadow and take a fresh one: the document under it was swapped wholesale.</summary>
+    private void ResetShadow()
+    {
+        _baselineShadow = null;
+        SyncProposals();
+    }
+
+    private static bool HasProposal(ResidenceDoc doc)
+    {
+        if (doc?.variants == null) return false;
+        foreach (var v in doc.variants) if (v != null && !v.isBaseline) return true;
+        return false;
+    }
 
     public void SetActiveVariant(string variantId)
     {
@@ -1208,6 +1260,7 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
         Doc.activeVariantId = variantId;
         ClearSelection();
         History.Clear();   // undo does not span variants: each is its own editing context
+        SyncProposals();   // before the render, so a proposal comes up already carrying the base's edits
         residenceRenderer?.RenderResidence(Doc, variantId, LevelIndex);
         MarkDirty();
     }
@@ -1380,6 +1433,10 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
 
         ResidenceStore.Migrate(restored);
         Doc = restored;
+        // The snapshot was taken before the edit, so it already holds the proposals as they were
+        // before that edit was carried into them: undo takes both back in one step, and the shadow
+        // must describe the restored baseline before AfterHistoryJump's MarkDirty diffs against it.
+        ResetShadow();
         ClearSelection();
         residenceRenderer?.RenderResidence(Doc, Doc.activeVariantId, LevelIndex);
     }
@@ -2321,6 +2378,7 @@ public class ResidenceEditController : MonoBehaviour, EditHistory.IHost
         if (Doc == null) return;
         ResidenceStore.Archive(Doc.id);
         Doc = null;
+        _baselineShadow = null;
         residenceRenderer?.RenderResidence(null);
         SyncUnderlayQuad();
         RefreshLibrary();

@@ -69,6 +69,8 @@ scene; the Site stack is absent from it.
   everywhere but on a residence created from scratch) plus any number of named proposals. Switching is
   a re-render. Comparing two variants gives
   a plain-English change list, any line of which can be reverted on its own. See `ModeBand`.
+  **Editing the baseline carries into every proposal** (`VariantSync`, from `MarkDirty`); a proposal's
+  own change to the same element wins and stays in its list.
 - **Level** (`LevelDef`): one storey. **One is edited and rendered at a time**, chosen by the floor
   chip in the top bar (drawn only when the residence has more than one).
 - **Underlay** (`UnderlayDef`): the imported floor-plan sketch, calibrated so tracing is at true scale.
@@ -143,7 +145,8 @@ Each of these was argued out; the reasoning is in the linked notes.
 - **`SampleResidences.Generation` was not bumped** for the RoomFinish and swing schema changes (nothing
   visible moved). → walls-and-rooms
 - **Neither `Relink` nor `Sync` runs after a generated plan**, on load, in `Migrate`, or from
-  `VariantRevert`. → import-and-sketch, walls-and-rooms
+  `VariantRevert`. `VariantSync` is the one `Sync` caller outside the tools, on a proposal storey whose
+  walls it just changed. → import-and-sketch, walls-and-rooms, variants-and-report
 - **Turning circles** are reported only in `MeasureTool`; `ResidenceMetrics.LargestInscribedCircle` stays
   (used by `OccupancyModel`, `StandableStart`, `RoomRegions.Sync`). → ui
 - **Not ported from the Site server**: content-hash dedup, multi-client sync. **Not in ResidenceViz**:
@@ -207,7 +210,7 @@ Fixtures: `BrushGeometryTests`, `CustomItemsTests`, `DecorAlignmentTests`, `Deco
 `FenceLinkerTests`, `ResidenceMetricsTests`, `LayoutConverterTests`, `OpeningFitTests`, `PathGeometryTests`,
 `PathMeshTests`, `PlanBuilderTests`, `PolygonTriangulatorTests`, `RoomMeshBuilderTests`,
 `SampleResidencesTests`, `StarterRoomTests`, `TileDeformTests`, `UnitsTests`, `VariantDiffTests`,
-`WallLayoutTests`, `WallMeshBuilderTests`, `WallSnappingTests`. `SampleResidencesTests` runs every structural, placement and
+`VariantSyncTests`, `WallLayoutTests`, `WallMeshBuilderTests`, `WallSnappingTests`. `SampleResidencesTests` runs every structural, placement and
 occupancy check over all six samples, because the samples are data and data has no compiler.
 
 ## Repository layout

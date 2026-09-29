@@ -78,7 +78,9 @@ leaves a notch, `ResidenceRenderer` skips, so these rules are what keeps it righ
   `Untyped` room. Region claims nothing: a new `Untyped` room, real from that instant. Room claimed by
   nothing: removed with a warning. **Surviving rooms keep their existing order.**
 - `Sync` is called from `WallTool.CommitSegment` (both paths), `SelectTool.DeleteSelected` for a
-  wall, and the Rooms rail's **Detect rooms**: each inside the caller's `RecordEdit`. **Never** on
+  wall, the Rooms rail's **Detect rooms**: each inside the caller's `RecordEdit`; and from
+  `VariantSync.Propagate`, on a proposal storey whose walls it just added, removed or moved (rooms
+  travel by id first, so `Sync` only corrects polygons). **Never** on
   thickness/height edits, from `PlanBuilder`, on load, in `Migrate`, or from `VariantRevert` (which
   restores polygons by `Copy`, so the diff is empty by construction). `ResidenceRenderer` renders
   `level.rooms`, never `Find`.

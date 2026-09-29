@@ -192,3 +192,68 @@ overlay of where they used to be is not editing, it is guessing. The toggle stil
 Proposals are named `Proposal MM/DD/YYYY` now, with the residence's proposal ordinal in front of the date
 from the second onwards. Letters walked past Z, and deleting "B" minted a second "B".
 
+## Base edits reach every proposal: `VariantSync`
+
+A proposal is a full copy of the baseline, ids preserved, and nothing ever revisited that copy. So
+the day a proposal existed, every later edit to the base environment (a chair added, a wall drawn, a
+door removed) landed in the base alone, and `Compare(baseline, proposal)` said the proposal had
+**removed** it. True of the data, false of what happened. The report said the same. The base
+environment is the record of how the residence *is*; a change to that record is a fact every
+proposal inherits, silently, because the proposal did not do it.
+
+**A shadow diff, not per-tool hooks.** Eleven tools mutate the level and each knows what it changed,
+so the obvious fix was a "propagate" call in each. The one already-shared fact is better: every
+mutation ends in `MarkDirty`. The controller keeps a private copy of the baseline as it last stood
+(`VariantSync.Snapshot`), and `Compare(shadow, baseline)` after an edit is precisely the list of what
+that edit did, in the same terms the change list itself uses.
+
+**`VariantRevert` is the primitive.** `Revert(reference, proposal, change)` makes the proposal match
+the reference for one element: present in the reference, copy it in (or replace); absent, remove it,
+with the same cascades `SelectTool.DeleteSelected` runs (wall → openings, mounts, sensors; furniture →
+sensors; room → `RoomRegions.RemoveRoom`; person → worn devices); and refuse where the result would
+be a `wallId` or `hostId` resolving to nothing. Called with the *new* baseline as the reference, that
+is propagation, case for case, including the refusals, which are exactly the cases where carrying
+the change would leave a door that exists in the data and nowhere on screen. No new copy code, no
+new cascade, and the "exact inverse" property that specifies `VariantRevert` now also guarantees
+that after a base edit `Compare(baseline, proposal)` is what it was before it.
+
+**The proposal's own edit wins**, per element. The keys of `Compare(shadow, proposal)` are what the
+proposal has done on its own; a base change on one of those is left alone, and that difference stays
+in the list where it belongs. The unit is the element, not the field: the proposal moved the chair,
+the base resized it, the proposal keeps its chair. Dependents follow a removed host (the proposal's
+grab bar on a wall the base removed goes with the wall), because that is what removing a wall means
+everywhere else in this codebase.
+
+**Synchronous, in `MarkDirty`.** A `_pending` flag drained next frame is the house pattern for
+anything touching IMGUI's control count; this touches none, and the flag has three real holes.
+`SetActiveVariant` is called straight from `OnGUI` and renders at once, so a proposal came up one
+edit behind. `RecordBefore` snapshots the whole document before the *next* edit, so a pending
+propagation would be captured un-applied and never applied after an undo. `SaveResidence` writes
+whatever is there. Propagation is pure data work and safe from anywhere, so it runs in the one place
+every edit already passes through. The undo argument comes free: the snapshot precedes the edit,
+propagation happens inside the edit's own `MarkDirty`, so Ctrl+Z takes both back together, and
+`Restore` resets the shadow to the restored baseline.
+
+**Storeys pair by id only.** `VariantDiff.MatchLevel` falls back to position, which is right for a
+diff between two whole variants and wrong here: after `Stories.Remove` of a middle storey, position
+pairs two different floors and the "changes" it reports would be applied to the wrong one. The sync
+therefore diffs one storey at a time, by the id `Stories.Add` gives a storey in every variant. A
+storey missing from the shadow reads as empty, so a shadow one `Stories.Add` stale simply delivers
+the first thing drawn there as an addition.
+
+**Rooms travel by id, then `Sync` runs once.** The base's own `Sync` reshaped rooms and minted any new
+`Untyped` one; those arrive in the proposal under the same ids first, so the change list stays empty.
+Then, only on a proposal storey where a wall was added, removed or moved (never a thickness or height
+edit, per the rooms rules), `RoomRegions.Sync` puts the polygons right for *that proposal's* walls.
+Where they agree with the base it is a no-op; where the proposal had its own wall edits, whatever it
+changes is the proposal's own honest difference.
+
+**The sync sees exactly what the diff sees.** A field `VariantDiff` does not compare (a note, a marker
+colour, a device's privacy class) neither travels nor shows in any list. That is what makes "a base
+edit is absent from every proposal's report" true by construction rather than by effort, and it is
+the line to hold: teach the diff a field and the sync learns it in the same commit.
+
+**Residences saved before this** carry the drift already; there is no "before" to diff against and
+nothing is repaired retroactively. The route is the one that was always there: each "Removed" row's
+✕ in Compare copies the base's element into the proposal.
+

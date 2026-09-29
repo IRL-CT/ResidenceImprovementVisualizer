@@ -2,9 +2,11 @@
 paths:
   - "Assets/Scripts/Authoring/Interior/VariantDiff.cs"
   - "Assets/Scripts/Authoring/Interior/VariantRevert.cs"
+  - "Assets/Scripts/Authoring/Interior/VariantSync.cs"
   - "Assets/Scripts/ResidenceViz/Report/**"
   - "Assets/Scripts/ResidenceViz/Tools/CompareTool.cs"
   - "Assets/Tests/EditMode/VariantDiffTests.cs"
+  - "Assets/Tests/EditMode/VariantSyncTests.cs"
 ---
 
 # Variants. Compare, revert, ghost, report
@@ -23,6 +25,19 @@ paths:
   opening or mount onto a wall the proposal removed (restore the wall first); reverting an added wall
   cascades to its openings, mounts and the sensors on those openings, mirroring
   `SelectTool.DeleteSelected`.
+- **`VariantSync` carries every baseline edit into every proposal**, from
+  `ResidenceEditController.MarkDirty` (synchronous, never a deferred flag: `SetActiveVariant`,
+  `RecordBefore` and `SaveResidence` all read the proposals right after an edit). The controller holds
+  a **shadow** of the baseline (`VariantSync.Snapshot`, hand copies via `RevertAll`);
+  `Compare(shadow, baseline)` is what the edit did and each change goes through
+  `VariantRevert.Revert(baseline, proposal, change)` with the **new** baseline as the reference. A
+  proposal's own change to the same element (a key of `Compare(shadow, proposal)`) **wins** and stays
+  in its list; dependents follow a removed host; a refusal is skipped and shows honestly. **Storeys pair
+  by id only** (a storey missing from the shadow reads as empty). `RoomRegions.Sync` runs on a
+  proposal storey only after a wall was added, removed or moved, never on a thickness or height edit.
+  **The sync sees exactly what the diff sees**: a field `VariantDiff` ignores neither travels nor
+  reports. The shadow is reset in `AfterOpen` and undo's `Restore`, refreshed whenever the baseline
+  moved, and null while the residence has no proposal.
 - **`CompareTool`** rows are grouped by room; click selects + focuses with `reveal: false`; ✕ reverts
   undoably; `VariantDef.description` is edited here and heads the report.
 - **The ghost** (`ResidenceRenderer._ghostVariantId`/`_ghostOn`) is re-applied last in every `Rebuild`

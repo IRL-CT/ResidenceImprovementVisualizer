@@ -94,15 +94,13 @@ public class ExitPrompt
             GUI.FocusControl(null);
         }
 
-        // The scrim covers the whole window, including the rails and the timeline. A Button with no
-        // style under the card is what actually swallows the clicks: painting a texture leaves every
-        // control beneath it live, and the first thing anyone does with a dialog they did not expect
-        // is click beside it.
+        // The scrim covers the whole window, including the rails and the timeline. Painting it leaves
+        // every control beneath it live; the Button that actually swallows the clicks is drawn AFTER
+        // the card, at the bottom of this method. See the note there.
         var prev = GUI.color;
         GUI.color = UITheme.Scrim;
         GUI.DrawTexture(window, UITheme.Pixel);
         GUI.color = prev;
-        GUI.Button(window, GUIContent.none, GUIStyle.none);
 
         CardRect = new Rect(window.x + (window.width - CardW) * 0.5f,
                             window.y + (window.height - CardH) * 0.5f,
@@ -146,6 +144,14 @@ public class ExitPrompt
         UITheme.Tip("Go back to the app with nothing changed  (Esc)");
 
         UITheme.EndPanel();
+
+        // The click swallower, AFTER the card, deliberately. IMGUI hands a mouse press to the first
+        // control in draw order whose rect contains it, and that control uses the event, so a
+        // whole-window Button drawn before the card claimed every press meant for the three answers
+        // and the card answered only to Enter and Esc. Drawn here, the answers see the press first
+        // and this catches only what lands beside them, which is the first thing anyone does with a
+        // dialog they did not expect. GUIStyle.none paints nothing, so the order costs nothing visually.
+        GUI.Button(window, GUIContent.none, GUIStyle.none);
     }
 
     // ---- the words ----
